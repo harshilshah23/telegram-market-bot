@@ -1,0 +1,25 @@
+{
+  "name": "telegram-market-bot",
+  "version": "1.0.0",
+  "description": "Lightweight market-intelligence terminal inside Telegram",
+  "type": "module",
+  "main": "bot/bot.js",
+  "scripts": {
+    "start": "node bot/bot.js",
+    "test": "node tests/test_pipeline.js"
+  },
+  "keywords": [
+    "telegram",
+    "market-intelligence",
+    "finance",
+    "crypto",
+    "stocks"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "fast-xml-parser": "^4.5.3",
+    "grammy": "^1.35.0"
+  }
+}
