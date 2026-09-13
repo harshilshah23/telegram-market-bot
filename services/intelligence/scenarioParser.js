@@ -169,7 +169,7 @@ export function parseScenarioDeterministic(scenarioText) {
   }
 
   // B. Detect Direction & Action
-  const isDrop = /(fall|drop|crash|down|lose|loss|drawdown|plunge|slump|decline|sink|tumble|cut|hammered|dump|bleed)/.test(text);
+  const isDrop = /(fall|drop|crash|down|lose|loses|loss|drawdown|plunge|slump|decline|sink|tumble|cut|hammered|dump|bleed|crush|crushed)/.test(text);
   const isRise = /(rise|rally|pump|up|gain|surge|climb|spike|soar|hike|boost)/.test(text);
 
   if (isDrop) {
@@ -253,23 +253,29 @@ export function parseScenarioDeterministic(scenarioText) {
 
   // E. Detect Asset Shock Targets (Only if not a Macro Event)
   if (!target) {
-    if (/(gold|xau).*(drop|fall|crash|plunge|down|lose|decline|sink)/.test(text) || /(if|suppose|assume)\s*(gold|xau)/.test(text)) {
+    if (/\b(silver|xag)\b/.test(text)) {
+      target = 'SI=F';
+    } else if (/\b(oil|crude|wti|brent)\b/.test(text)) {
+      target = 'CL=F';
+    } else if (/(gold|xau).*(drop|fall|crash|plunge|down|lose|loses|decline|sink)/.test(text) || /(if|suppose|assume)\s*(gold|xau)/.test(text)) {
       target = 'GC=F';
-    } else if (/(btc|bitcoin).*(drop|fall|crash|plunge|down|lose|decline|hammered|dump)/.test(text) || /(if|suppose|assume|let's say)\s*(btc|bitcoin)/.test(text)) {
+    } else if (/(btc|bitcoin).*(drop|fall|crash|plunge|down|lose|loses|decline|hammered|dump)/.test(text) || /(if|suppose|assume|let's say)\s*(btc|bitcoin)/.test(text)) {
       target = 'BTC';
-    } else if (/(eth|ethereum).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(eth|ethereum)/.test(text)) {
+    } else if (/(eth|ethereum).*(drop|fall|crash|plunge|down|lose|loses|decline)/.test(text) || /(if|suppose|assume)\s*(eth|ethereum)/.test(text)) {
       target = 'ETH';
-    } else if (/(sol|solana).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(sol|solana)/.test(text)) {
+    } else if (/(sol|solana).*(drop|fall|crash|plunge|down|lose|loses|decline)/.test(text) || /(if|suppose|assume)\s*(sol|solana)/.test(text)) {
       target = 'SOL';
-    } else if (/(nvda|nvidia).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(nvda|nvidia)/.test(text)) {
+    } else if (/(nvda|nvidia).*(drop|fall|crash|plunge|down|lose|loses|decline)/.test(text) || /(if|suppose|assume)\s*(nvda|nvidia)/.test(text)) {
       target = 'NVDA';
-    } else if (/(nasdaq|qqq|tech).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(nasdaq|qqq)/.test(text)) {
+    } else if (/(nasdaq|qqq|tech).*(drop|fall|crash|plunge|down|lose|loses|decline)/.test(text) || /(if|suppose|assume)\s*(nasdaq|qqq)/.test(text)) {
       target = 'QQQ';
-    } else if (/(s&p|spy|stocks?).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(s&p|spy)/.test(text)) {
+    } else if (/(s&p|spy|stocks?).*(drop|fall|crash|plunge|down|lose|loses|decline)/.test(text) || /(if|suppose|assume)\s*(s&p|spy)/.test(text)) {
       target = 'SPY';
     } else {
       // If prompt specifically asks about an asset without an explicit shock
       if (text.includes('gold')) target = 'GC=F';
+      else if (text.includes('silver')) target = 'SI=F';
+      else if (text.includes('oil')) target = 'CL=F';
       else if (text.includes('eth')) target = 'ETH';
       else if (text.includes('sol')) target = 'SOL';
       else if (text.includes('nvda')) target = 'NVDA';
@@ -283,8 +289,11 @@ export function parseScenarioDeterministic(scenarioText) {
     { key: 'dollar', sym: 'DX-Y.NYB', regex: /\b(dollar|dxy|usd|greenback)\b/ },
     { key: 'euro', sym: 'EURUSD=X', regex: /\b(euro|eur)\b/ },
     { key: 'gold', sym: 'GC=F', regex: /\b(gold|xau)\b/ },
+    { key: 'silver', sym: 'SI=F', regex: /\b(silver|xag)\b/ },
+    { key: 'oil', sym: 'CL=F', regex: /\b(oil|crude|wti|brent)\b/ },
+    { key: 'energy', sym: 'XLE', regex: /\b(energy|energy stocks|oil stocks|xle)\b/ },
     { key: 'nasdaq', sym: 'QQQ', regex: /\b(nasdaq|tech|tech stocks|qqq)\b/ },
-    { key: 'stocks', sym: 'SPY', regex: /\b(stocks|equities|s&p|spy|us stocks|us equities)\b/ },
+    { key: 'stocks', sym: 'SPY', regex: /\b(stocks|equities|s&p|spy|us stocks|us equities|spx|equitie|equitiess)\b/ },
     { key: 'bitcoin', sym: 'BTC', regex: /\b(bitcoin|btc|crypto)\b/ },
     { key: 'ethereum', sym: 'ETH', regex: /\b(ethereum|eth)\b/ },
     { key: 'solana', sym: 'SOL', regex: /\b(solana|sol)\b/ }

@@ -40,8 +40,14 @@ function calculateBeta(dependentReturns, independentReturns) {
 function formatSymbol(sym) {
   const s = sym.toUpperCase();
   if (['BTC', 'ETH', 'SOL', 'DOGE', 'XRP'].includes(s)) return `${s}-USD`;
-  if (s === 'GOLD') return 'GC=F';
-  if (s === 'DXY') return 'DX-Y.NYB';
+  if (s === 'GOLD' || s === 'XAU') return 'GC=F';
+  if (s === 'SILVER' || s === 'XAG') return 'SI=F';
+  if (s === 'OIL' || s === 'CRUDE' || s === 'WTI') return 'CL=F';
+  if (s === 'BRENT') return 'BZ=F';
+  if (s === 'ENERGY' || s === 'ENERGY STOCKS' || s === 'XLE') return 'XLE';
+  if (s === 'DXY' || s === 'DOLLAR' || s === 'USD') return 'DX-Y.NYB';
+  if (s === 'SPX' || s === 'S&P' || s === 'S&P 500') return '^GSPC';
+  if (s === 'NASDAQ' || s === 'NDX') return 'QQQ';
   return s;
 }
 
@@ -338,6 +344,10 @@ export async function analyzeMarketScenario(scenarioText) {
     } else {
       results.methodology = 'Cross-Asset Empirical Beta & Correlation Analysis';
     }
+
+    const shockSym = formatSymbol(shock.target);
+    const shockBars = await fetchHistoricalData(shockSym, '5y', '1d').catch(() => []);
+    const shockRets = getReturns(shockBars);
 
     // Calculate directional beta for each impact asset
     for (const imp of impactAssets) {
