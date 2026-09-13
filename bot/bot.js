@@ -51,8 +51,10 @@ export async function startBot() {
   console.log(`🤖 Gemini AI Mode: ${config.hasGemini ? 'ENABLED' : 'DISABLED (Using Deterministic Heuristic Synthesizer)'}`);
 
   // Fetch bot info
+  let botUsername = 'MarketBot';
   try {
     const me = await bot.api.getMe();
+    botUsername = me.username;
     console.log(`✅ Connected to Telegram as @${me.username} (${me.first_name})`);
     console.log('📡 Listening for incoming messages...');
   } catch (err) {
@@ -65,7 +67,7 @@ export async function startBot() {
     const port = config.port || 3000;
     const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', bot: me.username }));
+      res.end(JSON.stringify({ status: 'ok', bot: botUsername }));
     });
     server.listen(port, () => {
       console.log(`🌐 Healthcheck server listening on port ${port}`);
