@@ -28,7 +28,15 @@ export function formatScenarioReport(data) {
 
   // 2. What the Data Shows (Deterministic Numerical Evidence)
   lines.push(`<b>WHAT THE DATA SHOWS (EVIDENCE)</b>`);
-  lines.push(`• <b>Event / Shock:</b> ${escapeHtml(shock?.description || `${shock?.target} ${shock?.magnitude}${shock?.units}`)}`);
+  let shockDesc = shock?.description;
+  if (!shockDesc) {
+    if (shock?.target && shock?.magnitude !== null && shock?.magnitude !== undefined) {
+      shockDesc = `${shock.target} ${shock.direction === 'negative' ? '-' : '+'}${shock.magnitude}${shock.units === 'percent' ? '%' : (shock.units || '')}`;
+    } else {
+      shockDesc = `${shock?.target || 'Asset'} ${shock?.action || 'Event'}`;
+    }
+  }
+  lines.push(`• <b>Event / Shock:</b> ${escapeHtml(shockDesc)}`);
   if (conditions && conditions.length > 0) {
     const formattedConds = conditions.map(c => typeof c === 'object' ? (c.description || `${c.asset} in ${c.value}`) : String(c));
     lines.push(`• <b>Conditions:</b> ${formattedConds.map(escapeHtml).join(', ')}`);

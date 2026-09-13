@@ -36,7 +36,10 @@ const STATIC_ALIASES = {
   'BRENT': { symbol: 'BZ=F', name: 'Brent Crude', type: 'commodity' },
   'NATGAS': { symbol: 'NG=F', name: 'Natural Gas', type: 'commodity' },
 
-  // Indices
+  // Indices & Currencies
+  'DXY': { symbol: 'DX-Y.NYB', name: 'US Dollar Index', type: 'index' },
+  'DOLLAR': { symbol: 'DX-Y.NYB', name: 'US Dollar Index', type: 'index' },
+  'USD': { symbol: 'DX-Y.NYB', name: 'US Dollar Index', type: 'index' },
   'SPX': { symbol: '^GSPC', name: 'S&P 500', type: 'index' },
   'S&P 500': { symbol: '^GSPC', name: 'S&P 500', type: 'index' },
   'S&P500': { symbol: '^GSPC', name: 'S&P 500', type: 'index' },

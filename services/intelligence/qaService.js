@@ -89,6 +89,8 @@ export async function answerMarketQuestion(question) {
   let falsePremiseWarning = null;
   const isEssentiallyFlat = primaryQuote && Math.abs(primaryQuote.changePercent) < 0.4;
 
+  const isCausalMechanism = queryType === 'causal_mechanism';
+
   if (queryType === 'price_movement' && isEssentiallyFlat) {
     falsePremiseWarning = `${primaryAsset.symbol} is essentially flat today (${primaryQuote.changePercent >= 0 ? '+' : ''}${primaryQuote.changePercent.toFixed(2)}%), so there is not a meaningful directional move to explain. The important story is current consolidation and the catalysts that could break it.`;
   } else if (queryType === 'outperformance_comparison' && primaryQuote && compQuote) {
@@ -136,6 +138,9 @@ ${falsePremiseWarning ? `CRITICAL PREMISE NOTICE:\n${falsePremiseWarning}\nYou M
 
 CRITICAL RULES:
 1. Answer the user's actual question directly in the very first sentence.
+${isCausalMechanism ? `   - For questions asking "why would X matter for Y" or "how does X affect Y":
+     FIRST explain the structural economic transmission mechanism clearly (e.g. why the US dollar index impacts dollar-denominated assets, global USD liquidity, and risk appetite).
+     THEN evaluate whether current market moves reflect that relationship or diverge from it.` : ''}
 2. Distinguish clearly between:
    - FACT: What the real-time data directly shows (e.g. BTC is at $77,270, up +0.03%).
    - INFERENCE: What that evidence reasonably suggests ("The data suggests...", "What stands out is...").
@@ -152,7 +157,7 @@ CRITICAL RULES:
    (Bullet points summarizing current prices, verified performance numbers, and relevant verified headlines)
 
    **So What Does This Mean?**
-   (2-3 grounded inference points translating what the consolidation, move, or catalyst means for an investor)
+   (2-3 grounded inference points translating what the consolidation, move, transmission mechanism, or catalyst means for an investor)
 
    **Key Catalysts to Watch**
    (Bullet points of upcoming confirmed macro events with verified calendar dates)`;
@@ -189,7 +194,10 @@ CRITICAL RULES:
   if (!responseText) {
     const lines = [];
     // 1. Quick Take
-    if (falsePremiseWarning) {
+    if (isCausalMechanism) {
+      const compName = comparisonAsset?.name || 'the US Dollar';
+      lines.push(`**Quick Take**\nA stronger ${compName} historically tightens global liquidity and increases the cost of capital, which typically creates headwind pressure on dollar-denominated risk assets like ${primaryAsset.name}.`);
+    } else if (falsePremiseWarning) {
       lines.push(`**Quick Take**\n${falsePremiseWarning}`);
     } else if (isEssentiallyFlat) {
       lines.push(`**Quick Take**\n${primaryAsset.symbol} is essentially flat today, trading in a tight consolidation range without a dominant directional driver.`);
@@ -210,7 +218,11 @@ CRITICAL RULES:
 
     // 3. So What Does This Mean?
     lines.push(`\n**So What Does This Mean?**`);
-    if (isEssentiallyFlat) {
+    if (isCausalMechanism) {
+      lines.push(`• **Denominator Effect**: Because ${primaryAsset.symbol} is priced primarily in USD, a strengthening dollar mechanically requires more non-dollar purchasing power to buy the same unit.`);
+      lines.push(`• **Global Liquidity Regime**: Dollar strength often reflects tighter Fed policy or global safe-haven flight, conditions that historically reduce risk appetite for volatile assets.`);
+      lines.push(`• **Live Context**: Look at whether ${primaryAsset.symbol} and ${comparisonAsset?.symbol || 'DXY'} are currently moving inversely or whether crypto-specific catalysts are dominating macro correlation.`);
+    } else if (isEssentiallyFlat) {
       lines.push(`• The data indicates price consolidation rather than an active directional trend.`);
       lines.push(`• Without a breaking fundamental news catalyst, trading reflects routine balance between buyers and sellers.`);
     } else {

@@ -86,7 +86,7 @@ CRITICAL RULES:
    (2-3 bullet points analyzing cross-asset divergence, leadership, or liquidity flows without financial jargon)
 
    **So What Does This Mean for Investors?**
-   (1-2 sentences on what practical positioning or patience is warranted today)`;
+   (1-2 grounded sentences on what the observed cross-asset price behavior actually indicates. NEVER provide generic fortune-cookie trading advice like 'chasing breakouts carries elevated false-start risk' or 'manage your risk'. Focus solely on what the cross-asset relationship implies)`;
 
     try {
       const url = 'https://openrouter.ai/api/v1/chat/completions';

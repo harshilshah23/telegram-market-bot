@@ -5,22 +5,24 @@ Analyze the user's natural language market question and extract a structured res
 
 SCHEMA:
 {
-  "queryType": "price_movement" | "outperformance_comparison" | "macro_risk" | "catalyst_check" | "general_market",
-  // - "price_movement": Questions like "Why is BTC moving/dropping/rising today?"
+  "queryType": "price_movement" | "outperformance_comparison" | "macro_risk" | "catalyst_check" | "causal_mechanism" | "general_market",
+  // - "causal_mechanism": Conceptual / transmission questions like "Why would a stronger dollar matter for Bitcoin?", "How does higher yield affect tech stocks?"
+  // - "price_movement": Questions about today's price action like "Why is BTC moving/dropping/rising today?"
   // - "outperformance_comparison": Questions comparing relative performance like "Is ETH outperforming BTC?", "How is tech doing vs energy?"
   // - "macro_risk": Questions about macro headwinds, fed meetings, inflation risks
   // - "catalyst_check": Questions about what to watch, upcoming earnings, dates
 
   "primaryAsset": "BTC", // Symbol of main asset asked about (e.g. "BTC", "NVDA", "ETH", "SPY") or null
-  "comparisonAsset": null, // Symbol of second asset if a comparison is made (e.g. "ETH" vs "BTC"), or null
+  "comparisonAsset": null, // Symbol of second asset if a comparison or transmission driver is mentioned (e.g. "DXY", "ETH", "SPY"), or null
   "timeframe": "1d", // "1d", "1w", "1m", "ytd"
   "userAssumption": "Asset made a significant move", // What the user assumes in the question, or null
   "topics": ["volatility", "fed"] // Array of relevant topic tags
 }
 
 RULES:
-1. Map names to symbols (Bitcoin -> "BTC", Ethereum -> "ETH", Nvidia -> "NVDA", S&P 500 / stocks / market -> "SPY", Nasdaq -> "QQQ").
-2. Return ONLY raw JSON without markdown code fences.`;
+1. If the question asks "why would X matter for Y", "how does X affect Y", or "what does X mean for Y", classify queryType as "causal_mechanism", set comparisonAsset to X and primaryAsset to Y.
+2. Map names to symbols (Bitcoin -> "BTC", Ethereum -> "ETH", Dollar/DXY -> "DXY", Nvidia -> "NVDA", S&P 500 / stocks / market -> "SPY", Nasdaq -> "QQQ", Gold -> "GOLD").
+3. Return ONLY raw JSON without markdown code fences.`;
 
 function sanitizeJson(text) {
   if (!text) return '';
@@ -70,7 +72,22 @@ export async function parseQuestionIntent(question) {
   let primaryAsset = 'SPY';
   let comparisonAsset = null;
 
-  if (/outperform|better than|vs|beating|versus/.test(qLower)) {
+  // Causal mechanism check: "Why would X matter for Y", "how does X affect Y"
+  if (/(why would|how does|why does|how would|what does.*mean for|impact of.*on|matter for)/.test(qLower)) {
+    queryType = 'causal_mechanism';
+    if (/(dollar|dxy|greenback|usd)/.test(qLower)) {
+      comparisonAsset = 'DXY';
+    } else if (/(rates?|yields?|fed|treasur)/.test(qLower)) {
+      comparisonAsset = 'FED';
+    } else if (/(gold|xau)/.test(qLower)) {
+      comparisonAsset = 'GOLD';
+    }
+
+    if (/\b(btc|bitcoin)\b/.test(qLower)) primaryAsset = 'BTC';
+    else if (/\b(eth|ethereum)\b/.test(qLower)) primaryAsset = 'ETH';
+    else if (/\b(tech|nasdaq|qqq)\b/.test(qLower)) primaryAsset = 'QQQ';
+    else primaryAsset = 'SPY';
+  } else if (/outperform|better than|vs|beating|versus/.test(qLower)) {
     queryType = 'outperformance_comparison';
     if (/eth/.test(qLower) && /btc|bitcoin/.test(qLower)) {
       primaryAsset = 'ETH';
@@ -84,7 +101,10 @@ export async function parseQuestionIntent(question) {
     queryType = 'catalyst_check';
   }
 
-  if (!comparisonAsset) {
+  if (!primaryAsset) {
+    primaryAsset = 'BTC';
+  }
+  if (!comparisonAsset && queryType !== 'causal_mechanism') {
     if (/\b(btc|bitcoin)\b/.test(qLower)) primaryAsset = 'BTC';
     else if (/\b(eth|ethereum)\b/.test(qLower)) primaryAsset = 'ETH';
     else if (/\b(nvda|nvidia)\b/.test(qLower)) primaryAsset = 'NVDA';
@@ -100,7 +120,7 @@ export async function parseQuestionIntent(question) {
     primaryAsset,
     comparisonAsset,
     timeframe: '1d',
-    userAssumption: /why.*(moving|falling|dropping|crashing|down|up)/.test(qLower) ? 'Asset made significant directional move' : null,
+    userAssumption: queryType === 'price_movement' && /why.*(moving|falling|dropping|crashing|down|up)/.test(qLower) ? 'Asset made significant directional move' : null,
     topics: []
   };
 }

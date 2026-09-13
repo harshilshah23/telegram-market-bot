@@ -1,10 +1,8 @@
-﻿import { InlineKeyboard } from 'grammy';
+import { InlineKeyboard } from 'grammy';
 
-export function getScenarioKeyboard(asset, shockPct) {
+export function getScenarioKeyboard(asset = 'BTC', shockPct = null) {
   const keyboard = new InlineKeyboard();
-  const absShock = Math.abs(shockPct);
-  // Suggest a natural language backtest rule based on the scenario shock!
-  const suggestedStrategy = `buy ${asset} whenever it drops ${absShock}% in a day and sell after 10 days`;
+  const absShock = typeof shockPct === 'number' && !isNaN(shockPct) ? Math.abs(shockPct) : 10;
   
   keyboard
     .text(`🧪 Backtest This Dip Strategy`, `scen:bt:${asset}:${absShock}`)

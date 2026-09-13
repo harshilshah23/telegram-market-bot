@@ -119,13 +119,177 @@ export async function analyzeMarketScenario(scenarioText) {
     explanation: ''
   };
 
-  // METHOD 1: MACRO EVENT (Fed, ECB, Central Bank Rate Decisions)
-  if (scenarioType === 'macro_event' || shock.target === 'FED' || shock.target === 'ECB') {
+  // METHOD 1: CONDITIONAL SCENARIO (Joint Multi-Condition Period Search)
+  if (scenarioType === 'conditional_scenario' || (conditions && conditions.length > 0)) {
+    results.methodology = 'Joint Multi-Condition Historical Scan';
+    
+    // Check if shock is inflation or macro with a technical condition (e.g. BTC < 200dma)
+    const cond = conditions[0] || {};
+    const condAsset = cond.asset || 'BTC';
+    const condSym = formatSymbol(condAsset);
+    const isMaCondition = cond.type === 'moving_average';
+
+    if (shock.target === 'INFLATION' || shock.target === 'BOJ') {
+      const baseEvents = shock.target === 'INFLATION' 
+        ? (HISTORICAL_MACRO_EVENTS['US_CPI_UPSIDE_SURPRISE'] || [])
+        : (HISTORICAL_MACRO_EVENTS['BOJ_POLICY_CHANGE'] || []);
+      
+      const condBars = await fetchHistoricalData(condSym, '5y', '1d').catch(() => []);
+      const matchingEvents = [];
+
+      for (const evt of baseEvents) {
+        let conditionMet = true;
+        let condContext = evt.context;
+
+        if (isMaCondition && condBars && condBars.length > 200) {
+          const evtTs = Math.floor(new Date(evt.date).getTime() / 1000);
+          const barIdx = condBars.findIndex(b => b.time >= evtTs);
+          if (barIdx >= 200) {
+            const slice = condBars.slice(barIdx - 199, barIdx + 1);
+            const sma200 = slice.reduce((a, b) => a + b.close, 0) / 200;
+            const close = condBars[barIdx].close;
+            const isBelow = close < sma200;
+            conditionMet = cond.value === 'below_200dma' ? isBelow : !isBelow;
+            condContext = `${evt.context} [${condAsset} close: $${close.toFixed(0)} vs 200d SMA: $${sma200.toFixed(0)}]`;
+          }
+        }
+
+        if (conditionMet) {
+          matchingEvents.push({
+            name: evt.name,
+            date: evt.date,
+            context: condContext
+          });
+        }
+      }
+
+      results.sampleSize = matchingEvents.length;
+      if (results.sampleSize < 4) {
+        results.confidenceWarning = `Identified ${results.sampleSize} distinct historical occurrence${results.sampleSize === 1 ? '' : 's'} meeting the joint conditions in the lookback window.`;
+      }
+
+      for (const evt of matchingEvents) {
+        const perf = await calculatePostEventPerformance(evt.date, impactAssets);
+        results.historicalPrecedents.push({
+          name: evt.name,
+          date: evt.date,
+          context: evt.context,
+          subsequentPerformance: perf
+        });
+      }
+
+      // Calculate sensitivities between impact assets and benchmark
+      const macroBars = await fetchHistoricalData('^GSPC', '3y', '1d').catch(() => []);
+      const macroRets = getReturns(macroBars);
+      for (const imp of impactAssets) {
+        const impSym = formatSymbol(imp);
+        const impBars = await fetchHistoricalData(impSym, '3y', '1d').catch(() => []);
+        const impRets = getReturns(impBars);
+        if (impRets.length > 10 && macroRets.length > 10) {
+          const beta = calculateBeta(impRets, macroRets);
+          const corr = calculateCorrelation(impRets, macroRets);
+          results.sensitivityResults.push({
+            asset: imp,
+            betaToBenchmark: beta,
+            benchmarkName: 'S&P 500 (^GSPC)',
+            correlation: corr
+          });
+        }
+      }
+    } else {
+      // Standard asset drawdown + trend condition
+      const condTrend = cond.value || 'downtrend';
+      const shockSym = formatSymbol(shock.target);
+
+      const [shockBars, condBars] = await Promise.all([
+        fetchHistoricalData(shockSym, '5y', '1d').catch(() => []),
+        fetchHistoricalData(condSym, '5y', '1d').catch(() => [])
+      ]);
+
+      if (shockBars && shockBars.length > 50 && condBars && condBars.length > 50) {
+        const k = 2 / (50 + 1);
+        let ema = condBars[0].close;
+        const condMap = new Map();
+        for (let i = 0; i < condBars.length; i++) {
+          ema = condBars[i].close * k + ema * (1 - k);
+          const isDowntrend = condBars[i].close < ema;
+          condMap.set(condBars[i].date, { close: condBars[i].close, ema50: ema, isDowntrend });
+        }
+
+        const targetThreshold = (shock.magnitude || 15) / 100;
+        let lastClusterIdx = -999;
+        const matchingEvents = [];
+
+        for (let i = 5; i < shockBars.length - 25; i++) {
+          const condInfo = condMap.get(shockBars[i].date);
+          if (!condInfo) continue;
+          const trendMatches = condTrend === 'downtrend' ? condInfo.isDowntrend : !condInfo.isDowntrend;
+          if (!trendMatches) continue;
+
+          const rolling5dDrop = (shockBars[i].close - shockBars[i - 5].close) / shockBars[i - 5].close;
+          const dailyDrop = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
+          const isShockMatch = rolling5dDrop <= -targetThreshold || dailyDrop <= -(targetThreshold * 0.65);
+
+          if (isShockMatch && i - lastClusterIdx >= 15) {
+            lastClusterIdx = i;
+            const evtDate = shockBars[i].date;
+            const dropMag = rolling5dDrop <= -targetThreshold ? rolling5dDrop : dailyDrop;
+            matchingEvents.push({
+              date: evtDate,
+              name: `${shock.target} ${Math.abs((dropMag * 100).toFixed(1))}% Drawdown (${condAsset} in ${condTrend})`,
+              context: `${condAsset} was trading below its 50d EMA (${condInfo.close.toFixed(1)} vs ${condInfo.ema50.toFixed(1)}) as ${shock.target} dropped ${Math.abs((dropMag * 100).toFixed(1))}%`
+            });
+          }
+        }
+
+        results.sampleSize = matchingEvents.length;
+        if (results.sampleSize < 4) {
+          results.confidenceWarning = `Identified ${results.sampleSize} distinct historical period${results.sampleSize === 1 ? '' : 's'} where both conditions occurred simultaneously in the 5Y lookback.`;
+        }
+
+        for (const evt of matchingEvents) {
+          const perf = await calculatePostEventPerformance(evt.date, [shock.target, ...impactAssets]);
+          results.historicalPrecedents.push({
+            name: evt.name,
+            date: evt.date,
+            context: evt.context,
+            subsequentPerformance: perf
+          });
+        }
+
+        const shockRets = getReturns(shockBars);
+        for (const imp of impactAssets) {
+          const impSym = formatSymbol(imp);
+          const impBars = await fetchHistoricalData(impSym, '5y', '1d').catch(() => []);
+          const impRets = getReturns(impBars);
+          if (impRets.length > 10 && shockRets.length > 10) {
+            const beta = calculateBeta(impRets, shockRets);
+            const corr = calculateCorrelation(impRets, shockRets);
+            const item = {
+              asset: imp,
+              betaToShockAsset: beta,
+              correlation: corr
+            };
+            if (shock.magnitude !== null) {
+              item.impliedSensitivityMovePct = Number((-(shock.magnitude) * beta).toFixed(1));
+            }
+            results.sensitivityResults.push(item);
+          }
+        }
+      }
+    }
+  }
+  // METHOD 2: MACRO EVENT (BoJ, Fed, ECB, Inflation, Central Bank Rate Decisions)
+  else if (scenarioType === 'macro_event' || ['FED', 'ECB', 'BOJ', 'INFLATION'].includes(shock.target)) {
     results.methodology = 'Authentic Historical Macro Event Windows & Empirical Sensitivities';
     
-    // Select the authentic macro catalog based on central bank entity
+    // Select the authentic macro catalog based on entity
     let relevantEvents = [];
-    if (shock.target === 'ECB') {
+    if (shock.target === 'BOJ') {
+      relevantEvents = HISTORICAL_MACRO_EVENTS['BOJ_POLICY_CHANGE'] || [];
+    } else if (shock.target === 'INFLATION') {
+      relevantEvents = HISTORICAL_MACRO_EVENTS['US_CPI_UPSIDE_SURPRISE'] || [];
+    } else if (shock.target === 'ECB') {
       relevantEvents = HISTORICAL_MACRO_EVENTS['ECB_RATE_CUT'] || [];
     } else {
       relevantEvents = HISTORICAL_MACRO_EVENTS['FED_RATE_CUT'] || [];
@@ -147,7 +311,7 @@ export async function analyzeMarketScenario(scenarioText) {
       });
     }
 
-    // Also calculate standard 3-year asset sensitivities to S&P 500 / Macro benchmark
+    // Calculate standard 3-year asset sensitivities to S&P 500 / Macro benchmark
     const macroBars = await fetchHistoricalData('^GSPC', '3y', '1d').catch(() => []);
     const macroRets = getReturns(macroBars);
 
@@ -166,103 +330,14 @@ export async function analyzeMarketScenario(scenarioText) {
         });
       }
     }
-  } 
-  // METHOD 2: CONDITIONAL SCENARIO (Joint Multi-Condition Period Search)
-  else if (scenarioType === 'conditional_scenario') {
-    results.methodology = 'Joint Multi-Condition Historical Scan (Asset Shock & Benchmark Regime)';
-    
-    // Extract condition parameters
-    const cond = conditions[0] || {};
-    const condAsset = cond.asset || 'QQQ';
-    const condTrend = cond.value || 'downtrend';
-    const shockSym = formatSymbol(shock.target);
-    const condSym = formatSymbol(condAsset);
-
-    const [shockBars, condBars] = await Promise.all([
-      fetchHistoricalData(shockSym, '5y', '1d').catch(() => []),
-      fetchHistoricalData(condSym, '5y', '1d').catch(() => [])
-    ]);
-
-    if (shockBars && shockBars.length > 50 && condBars && condBars.length > 50) {
-      // Calculate 50-day EMA on benchmark to establish trend regime
-      const k = 2 / (50 + 1);
-      let ema = condBars[0].close;
-      const condMap = new Map();
-      for (let i = 0; i < condBars.length; i++) {
-        ema = condBars[i].close * k + ema * (1 - k);
-        const isDowntrend = condBars[i].close < ema;
-        condMap.set(condBars[i].date, { close: condBars[i].close, ema50: ema, isDowntrend });
-      }
-
-      // Search for joint conditions: Shock asset drop while benchmark condition is true
-      // Group nearby dates into distinct clusters (separated by >= 15 trading days)
-      const targetThreshold = (shock.magnitude || 15) / 100;
-      let lastClusterIdx = -999;
-      const matchingEvents = [];
-
-      for (let i = 5; i < shockBars.length - 25; i++) {
-        const condInfo = condMap.get(shockBars[i].date);
-        if (!condInfo) continue;
-        const trendMatches = condTrend === 'downtrend' ? condInfo.isDowntrend : !condInfo.isDowntrend;
-        if (!trendMatches) continue;
-
-        const rolling5dDrop = (shockBars[i].close - shockBars[i - 5].close) / shockBars[i - 5].close;
-        const dailyDrop = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
-        const isShockMatch = rolling5dDrop <= -targetThreshold || dailyDrop <= -(targetThreshold * 0.65);
-
-        if (isShockMatch && i - lastClusterIdx >= 15) {
-          lastClusterIdx = i;
-          const evtDate = shockBars[i].date;
-          const dropMag = rolling5dDrop <= -targetThreshold ? rolling5dDrop : dailyDrop;
-          matchingEvents.push({
-            date: evtDate,
-            name: `${shock.target} ${Math.abs((dropMag * 100).toFixed(1))}% Drawdown (${condAsset} in ${condTrend})`,
-            context: `${condAsset} was trading below its 50d EMA (${condInfo.close.toFixed(1)} vs ${condInfo.ema50.toFixed(1)}) as ${shock.target} dropped ${Math.abs((dropMag * 100).toFixed(1))}%`
-          });
-        }
-      }
-
-      results.sampleSize = matchingEvents.length;
-      if (results.sampleSize < 4) {
-        results.confidenceWarning = `Identified ${results.sampleSize} distinct historical period${results.sampleSize === 1 ? '' : 's'} where both conditions occurred simultaneously in the 5Y lookback.`;
-      }
-
-      // Calculate post-event forward returns for all matching periods
-      for (const evt of matchingEvents) {
-        const perf = await calculatePostEventPerformance(evt.date, [shock.target, ...impactAssets]);
-        results.historicalPrecedents.push({
-          name: evt.name,
-          date: evt.date,
-          context: evt.context,
-          subsequentPerformance: perf
-        });
-      }
-
-      // Calculate beta sensitivities between shock asset and impact assets
-      const shockRets = getReturns(shockBars);
-      for (const imp of impactAssets) {
-        const impSym = formatSymbol(imp);
-        const impBars = await fetchHistoricalData(impSym, '5y', '1d').catch(() => []);
-        const impRets = getReturns(impBars);
-        if (impRets.length > 10 && shockRets.length > 10) {
-          const beta = calculateBeta(impRets, shockRets);
-          const corr = calculateCorrelation(impRets, shockRets);
-          results.sensitivityResults.push({
-            asset: imp,
-            betaToShockAsset: beta,
-            correlation: corr,
-            impliedSensitivityMovePct: Number((-(shock.magnitude || 15) * beta).toFixed(1))
-          });
-        }
-      }
-    }
-  } 
-  // METHOD 2: DIRECT ASSET PRICE SHOCK / RELATIVE SHOCK
+  }
+  // METHOD 3: DIRECT ASSET PRICE SHOCK / RELATIVE SHOCK
   else {
-    results.methodology = 'Directional Empirical Sensitivity & Drawdown Recovery Analysis';
-    const shockSym = formatSymbol(shock.target);
-    const shockBars = await fetchHistoricalData(shockSym, '5y', '1d').catch(() => []);
-    const shockRets = getReturns(shockBars);
+    if (shock.magnitude !== null) {
+      results.methodology = 'Directional Empirical Sensitivity & Drawdown Recovery Analysis';
+    } else {
+      results.methodology = 'Cross-Asset Empirical Beta & Correlation Analysis';
+    }
 
     // Calculate directional beta for each impact asset
     for (const imp of impactAssets) {
@@ -273,59 +348,65 @@ export async function analyzeMarketScenario(scenarioText) {
       if (impRets.length > 10 && shockRets.length > 10) {
         const beta = calculateBeta(impRets, shockRets);
         const corr = calculateCorrelation(impRets, shockRets);
-        const magnitude = shock.magnitude || 20;
-        const sign = shock.direction === 'negative' ? -1 : 1;
-        const impliedMove = Number(((sign * magnitude) * beta).toFixed(1));
-
-        results.sensitivityResults.push({
+        const item = {
           asset: imp,
           betaToShockAsset: beta,
-          correlation: corr,
-          impliedSensitivityMovePct: impliedMove
-        });
-      }
-    }
+          correlation: corr
+        };
 
-    // Calculate genuine historical drawdown recovery times
-    const targetThreshold = (shock.direction === 'negative' ? -1 : 1) * ((shock.magnitude || 20) / 100);
-    const recoveryDaysList = [];
-    let occurrences = 0;
-
-    for (let i = 1; i < shockBars.length - 30; i++) {
-      const barChange = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
-      const isMatch = targetThreshold < 0 ? barChange <= targetThreshold * 0.4 : barChange >= targetThreshold * 0.4;
-      if (isMatch) {
-        occurrences++;
-        const preShock = shockBars[i - 1].close;
-        let recDays = null;
-        for (let j = i + 1; j < Math.min(i + 150, shockBars.length); j++) {
-          if (targetThreshold < 0 && shockBars[j].close >= preShock) {
-            recDays = j - i;
-            break;
-          } else if (targetThreshold > 0 && shockBars[j].close <= preShock) {
-            recDays = j - i;
-            break;
-          }
+        if (shock.magnitude !== null) {
+          const sign = shock.direction === 'negative' ? -1 : 1;
+          item.impliedSensitivityMovePct = Number(((sign * shock.magnitude) * beta).toFixed(1));
         }
-        if (recDays !== null) recoveryDaysList.push(recDays);
+
+        results.sensitivityResults.push(item);
       }
     }
 
-    results.sampleSize = occurrences;
-    if (occurrences < 4) {
-      results.confidenceWarning = `Sample size is limited to ${occurrences} historical instances of comparable magnitude in the 5Y lookback.`;
+    // Calculate genuine historical drawdown recovery times ONLY if a numerical magnitude was specified
+    if (shock.magnitude !== null) {
+      const targetThreshold = (shock.direction === 'negative' ? -1 : 1) * (shock.magnitude / 100);
+      const recoveryDaysList = [];
+      let occurrences = 0;
+
+      for (let i = 1; i < shockBars.length - 30; i++) {
+        const barChange = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
+        const isMatch = targetThreshold < 0 ? barChange <= targetThreshold * 0.4 : barChange >= targetThreshold * 0.4;
+        if (isMatch) {
+          occurrences++;
+          const preShock = shockBars[i - 1].close;
+          let recDays = null;
+          for (let j = i + 1; j < Math.min(i + 150, shockBars.length); j++) {
+            if (targetThreshold < 0 && shockBars[j].close >= preShock) {
+              recDays = j - i;
+              break;
+            } else if (targetThreshold > 0 && shockBars[j].close <= preShock) {
+              recDays = j - i;
+              break;
+            }
+          }
+          if (recDays !== null) recoveryDaysList.push(recDays);
+        }
+      }
+
+      results.sampleSize = occurrences;
+      if (occurrences < 4) {
+        results.confidenceWarning = `Sample size is limited to ${occurrences} historical instances of comparable magnitude in the 5Y lookback.`;
+      }
+
+      const avgRecovery = recoveryDaysList.length > 0 
+        ? Math.round(recoveryDaysList.reduce((a, b) => a + b, 0) / recoveryDaysList.length)
+        : null;
+
+      results.recoveryStats = {
+        occurrences,
+        avgRecoveryTradingDays: avgRecovery,
+        minRecoveryDays: recoveryDaysList.length > 0 ? Math.min(...recoveryDaysList) : null,
+        maxRecoveryDays: recoveryDaysList.length > 0 ? Math.max(...recoveryDaysList) : null
+      };
+    } else {
+      results.sampleSize = shockBars.length > 0 ? shockBars.length : 0;
     }
-
-    const avgRecovery = recoveryDaysList.length > 0 
-      ? Math.round(recoveryDaysList.reduce((a, b) => a + b, 0) / recoveryDaysList.length)
-      : null;
-
-    results.recoveryStats = {
-      occurrences,
-      avgRecoveryTradingDays: avgRecovery,
-      minRecoveryDays: recoveryDaysList.length > 0 ? Math.min(...recoveryDaysList) : null,
-      maxRecoveryDays: recoveryDaysList.length > 0 ? Math.max(...recoveryDaysList) : null
-    };
   }
 
   // LLM SYNTHESIS & PLAIN-ENGLISH TAKEAWAY OF DETERMINISTIC RESULTS
@@ -409,29 +490,44 @@ CRITICAL INFERENCE & CALIBRATION RULES:
     const mag = results.shock.magnitude;
     const isNegative = results.shock.direction === 'negative';
 
-    if (results.scenarioType === 'macro_event') {
-      lines.push(`**Quick Take**\nHistorically, central bank rate reductions provide liquidity support over medium horizons, though immediate 1-to-7 day market reactions vary considerably based on broader macro conditions.`);
-      lines.push(`\n**So What Does This Actually Mean?**\n• In the verified historical instances recorded, immediate post-cut performance varied significantly depending on whether the action was preemptive or crisis response.\n• Medium-term (30-day) trajectories generally reflect whether easing stabilized macroeconomic conditions.`);
+    if (results.scenarioType === 'macro_event' || ['FED', 'ECB', 'BOJ', 'INFLATION'].includes(targetName)) {
+      if (targetName === 'BOJ') {
+        lines.push(`**Quick Take**\nUnexpected Bank of Japan monetary policy shifts and rate adjustments have historically triggered global yen carry trade unwinds, introducing heightened short-term volatility across risk assets.`);
+        lines.push(`\n**So What Does This Actually Mean?**\n• Across the recorded historical BoJ policy changes, initial 1-to-7 day performance in equities and crypto reflected sharp repricing of global leverage.\n• The severity of downstream market shocks depended heavily on the degree to which markets were caught offside in currency carry trades.`);
+      } else if (targetName === 'INFLATION') {
+        lines.push(`**Quick Take**\nHotter-than-expected inflation releases consistently trigger hawkish rate repricing, typically placing immediate downward pressure on speculative assets.`);
+        lines.push(`\n**So What Does This Actually Mean?**\n• Historical CPI upside surprises forced immediate upward adjustments in bond yields and Fed funds terminal rate expectations.\n• Assets with high beta to market liquidity exhibited elevated sensitivity on the day of the release.`);
+      } else {
+        lines.push(`**Quick Take**\nHistorically, central bank rate reductions provide liquidity support over medium horizons, though immediate 1-to-7 day market reactions vary considerably based on broader macro conditions.`);
+        lines.push(`\n**So What Does This Actually Mean?**\n• In the verified historical instances recorded, immediate post-cut performance varied significantly depending on whether the action was preemptive or crisis response.\n• Medium-term (30-day) trajectories generally reflect whether easing stabilized macroeconomic conditions.`);
+      }
       lines.push(`\n**Key Caveats & Limitations**\n• With ${results.sampleSize} historical instances, outcomes should be viewed as illustrative precedent rather than statistical certainty.`);
     } else if (results.scenarioType === 'conditional_scenario') {
-      lines.push(`**Quick Take**\nWhen ${targetName} drops while benchmark equities are already in a confirmed downtrend, broader market weakness reinforces selling pressure.`);
-      lines.push(`\n**So What Does This Actually Mean?**\n• The data identifies ${results.sampleSize} matching periods where both conditions occurred simultaneously.\n• During these joint stress regimes, historical forward performance reflects prolonged chop rather than an immediate V-shaped bounce.`);
-      lines.push(`\n**Key Caveats & Limitations**\n• Historical joint regimes reflect severe macro stress; modern institutional participation may alter future transmission dynamics.`);
+      const condDesc = results.conditions[0]?.description || 'adverse technical conditions';
+      if (targetName === 'INFLATION') {
+        lines.push(`**Quick Take**\nWhen inflation surprises to the upside while assets are already trading beneath key moving averages, macro headwinds compound underlying technical weakness.`);
+        lines.push(`\n**So What Does This Actually Mean?**\n• The data identified ${results.sampleSize} historical occurrences where both conditions were satisfied (e.g. during the 2022 tightening cycle).\n• Under prevailing technical weakness (${condDesc}), hot CPI prints produced sustained multi-week drawdowns rather than immediate rebounds.`);
+      } else {
+        lines.push(`**Quick Take**\nWhen ${targetName} faces stress while ${condDesc}, broader market weakness reinforces selling pressure.`);
+        lines.push(`\n**So What Does This Actually Mean?**\n• The data identifies ${results.sampleSize} matching periods where both conditions occurred simultaneously.\n• During these joint stress regimes, historical forward performance reflects prolonged chop rather than an immediate V-shaped bounce.`);
+      }
+      lines.push(`\n**Key Caveats & Limitations**\n• Historical joint regimes reflect specific macro stress episodes; modern institutional liquidity may alter future transmission dynamics.`);
     } else {
       // Asset shock - Evaluate actual relationship strengths
       const strong = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) >= 0.5);
       const moderate = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) >= 0.2 && Math.abs(r.correlation || 0) < 0.5);
       const weak = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) < 0.2);
 
+      const magText = mag !== null && mag !== undefined ? `A ${mag}% move in ${targetName}` : `A move in ${targetName}`;
       if (strong.length > 0) {
         const sNames = strong.map(r => r.asset).join(', ');
-        lines.push(`**Quick Take**\nA ${mag}% drop in ${targetName} shows strong historical co-movement with ${sNames}, while other assets show substantially weaker linkage.`);
+        lines.push(`**Quick Take**\n${magText} shows strong historical co-movement with ${sNames}, while other assets show substantially weaker linkage.`);
       } else if (moderate.length > 0) {
         const m = moderate[0];
         const dir = m.correlation < 0 ? 'inverse' : 'positive';
-        lines.push(`**Quick Take**\nA ${mag}% move in ${targetName} shows its clearest statistical relationship with ${m.asset} (moderate ${dir} correlation of ${m.correlation}), while relationships with other assets are weak.`);
+        lines.push(`**Quick Take**\n${magText} shows its clearest statistical relationship with ${m.asset} (moderate ${dir} correlation of ${m.correlation}), while relationships with other assets are weak.`);
       } else {
-        lines.push(`**Quick Take**\nA ${mag}% move in ${targetName} has historically had little statistical transmission to the analyzed assets, with correlations remaining near zero.`);
+        lines.push(`**Quick Take**\n${magText} has historically had little statistical transmission to the analyzed assets, with correlations remaining near zero.`);
       }
 
       lines.push(`\n**So What Does This Actually Mean?**`);

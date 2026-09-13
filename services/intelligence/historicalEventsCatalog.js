@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Verifiable Historical Macro Events Catalog
  * Contains authentic recorded dates for major central bank actions and policy shifts.
  */
@@ -59,6 +59,58 @@ export const HISTORICAL_MACRO_EVENTS = {
       date: '2011-12-08',
       rateChangeBps: -50,
       context: 'Draghi delivers back-to-back 25bps cuts (50bps total in Q4) to combat Eurozone sovereign debt crisis'
+    }
+  ],
+  'BOJ_POLICY_CHANGE': [
+    {
+      name: 'BoJ July 2024 Hike to 0.25% & Global Carry Trade Unwind',
+      date: '2024-07-31',
+      rateChangeBps: 15,
+      context: 'BoJ raises uncollateralized overnight call rate to 0.25%, triggering sharp yen rally and global risk asset deleveraging'
+    },
+    {
+      name: 'BoJ Landmark NIRP Exit to 0.00%-0.10%',
+      date: '2024-03-19',
+      rateChangeBps: 10,
+      context: 'Ueda ends 8 years of negative interest rates, abolishing Yield Curve Control (YCC) and ETF buying'
+    },
+    {
+      name: 'BoJ YCC Flexibility Adjustment to 1.0%',
+      date: '2023-07-28',
+      rateChangeBps: 0,
+      context: 'BoJ relaxes 10Y JGB yield cap from strict 0.50% to flexible 1.0% upper bound'
+    },
+    {
+      name: 'BoJ Unexpected YCC Band Widening to ±0.50%',
+      date: '2022-12-20',
+      rateChangeBps: 0,
+      context: 'Kuroda surprises markets by doubling 10Y yield tolerance band to ±0.50%, jolting global bond and equity markets'
+    }
+  ],
+  'US_CPI_UPSIDE_SURPRISE': [
+    {
+      name: 'August 2022 Core CPI Upside Shock',
+      date: '2022-09-13',
+      rateChangeBps: null,
+      context: 'Core CPI accelerates to 6.3% YoY (above 6.1% expectations), triggering -9% daily drop in BTC and -5% in equities'
+    },
+    {
+      name: 'May 2022 CPI 40-Year High (8.6%)',
+      date: '2022-06-10',
+      rateChangeBps: null,
+      context: 'Headline CPI unexpectedly spikes to 8.6% shattering "peak inflation" narrative, prompting Fed to hike 75bps'
+    },
+    {
+      name: 'April 2022 CPI Upside Surprise (8.3%)',
+      date: '2022-05-11',
+      rateChangeBps: null,
+      context: 'CPI prints hotter than 8.1% estimate as BTC broke below 200DMA during early bear-market stage'
+    },
+    {
+      name: 'March 2024 Hot CPI Print',
+      date: '2024-04-10',
+      rateChangeBps: null,
+      context: 'Third consecutive hot CPI print of 2024 (0.4% MoM) forces markets to sharply push back Fed rate cut timing'
     }
   ]
 };
