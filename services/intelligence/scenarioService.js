@@ -328,9 +328,14 @@ export async function analyzeMarketScenario(scenarioText) {
     };
   }
 
-  // LLM SYNTHESIS OF DETERMINISTIC RESULTS
+  // LLM SYNTHESIS & PLAIN-ENGLISH TAKEAWAY OF DETERMINISTIC RESULTS
+  let plainEnglishSynthesis = null;
+
   if (config.hasLLM && config.hasOpenRouter) {
-    const prompt = `You are a quantitative macro strategist. Explain the following REAL calculated historical metrics for a hypothetical user scenario.
+    const prompt = `You are a senior investment strategist and plain-English market communicator.
+Explain the following REAL calculated historical metrics for a hypothetical user scenario.
+The user is NOT a quant. They want to know: "So what does this actually mean for a normal person?"
+
 USER SCENARIO: "${scenarioText}"
 
 STRUCTURED SCENARIO:
@@ -339,19 +344,30 @@ STRUCTURED SCENARIO:
 - Conditions: ${JSON.stringify(results.conditions)}
 - Methodology Used: ${results.methodology}
 - Sample Size: ${results.sampleSize}
-- Confidence Warning: ${results.confidenceWarning || 'Sufficient sample size'}
+- Confidence Warning: ${results.confidenceWarning || 'None'}
 
-DETERMINISTIC CALCULATED RESULTS (DO NOT ALTER ANY NUMBERS):
+DETERMINISTIC CALCULATED RESULTS (EVIDENCE - DO NOT ALTER NUMBERS):
 ${results.sensitivityResults.length > 0 ? 'Sensitivities:\n' + JSON.stringify(results.sensitivityResults, null, 2) : ''}
 ${results.historicalPrecedents.length > 0 ? 'Historical Occurrences Post-Event Performance:\n' + JSON.stringify(results.historicalPrecedents, null, 2) : ''}
 ${results.recoveryStats ? 'Recovery Statistics:\n' + JSON.stringify(results.recoveryStats, null, 2) : ''}
 
-INSTRUCTIONS:
-1. Explain what actually occurred or what the calculated sensitivity indicates.
-2. If this is a macro event (e.g. Fed cut), cite the specific historical occurrences and their real 1-day/7-day/30-day performance.
-3. If this is an asset shock, explain the directional sensitivity and recovery duration strictly based on calculated values.
-4. Mention the confidence warning if sample size is small.
-5. Keep it institutional, objective, concise (2 to 3 paragraphs). No financial advice.`;
+CRITICAL COMMUNICATION GUIDELINES:
+1. Translate quantitative metrics (beta, correlation, recovery days) into intuitive takeaways.
+   - e.g. Instead of just "Beta is 1.13, Corr 0.84", explain: "ETH has historically moved in the same direction as BTC during comparable selloffs, often with an amplified percentage move. That relationship is strong historically, but not a guaranteed outcome."
+2. Ground all inferences strictly in the calculated numbers above. Never invent facts or unsupported narratives.
+3. Distinguish clearly between:
+   - FACT: What the data directly shows.
+   - INFERENCE: What that evidence reasonably suggests ("Historically, this has tended to...", "The data suggests...", "What stands out is...").
+   - SPECULATION / CAVEAT: What could happen or limitations ("The important caveat is...", "Historical relationships are empirical sensitivities, not guarantees").
+4. STRUCTURE YOUR RESPONSE WITH THESE EXACT SECTIONS:
+   **Quick Take**
+   (1-2 clear, punchy sentences in normal human language summarizing the primary takeaway)
+
+   **So What Does This Actually Mean?**
+   (2-3 bullet points translating the data into practical insights: how the assets relate, what the recovery timeline looks like, and what the key dynamic is)
+
+   **Key Caveats & Limitations**
+   (1-2 sentences on sample size, shifting regimes, or why past moves aren't guarantees)`;
 
     try {
       const url = 'https://openrouter.ai/api/v1/chat/completions';
@@ -372,12 +388,50 @@ INSTRUCTIONS:
       });
       if (res.ok) {
         const data = await res.json();
-        results.explanation = data?.choices?.[0]?.message?.content?.trim();
+        const text = data?.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 40) {
+          plainEnglishSynthesis = text;
+        }
       }
     } catch (e) {
       console.warn('[Scenario Service] LLM synthesis fallback:', e.message);
     }
   }
+
+  // Resilient deterministic plain-English translation if LLM is unavailable
+  if (!plainEnglishSynthesis) {
+    const lines = [];
+    const targetName = results.shock.target;
+    const mag = results.shock.magnitude;
+    const isNegative = results.shock.direction === 'negative';
+
+    if (results.scenarioType === 'macro_event') {
+      lines.push(`**Quick Take**\nHistorically, central bank rate reductions provide liquidity support over medium horizons, though immediate 1-to-7 day market reactions are frequently volatile depending on broader macro conditions.`);
+      lines.push(`\n**So What Does This Actually Mean?**\n• Rate cuts reduce borrowing costs and tend to weaken the domestic currency, which historically aids risk appetite over 30-day windows.\n• In the verified historical instances recorded, immediate post-cut performance varied significantly based on whether the cut was preemptive easing or responding to systemic stress.`);
+      lines.push(`\n**Key Caveats & Limitations**\n• With ${results.sampleSize} historical instances, outcomes should be viewed as illustrative precedent rather than statistical certainty.`);
+    } else if (results.scenarioType === 'conditional_scenario') {
+      lines.push(`**Quick Take**\nWhen ${targetName} suffers a sharp drop while benchmark equities are already in a confirmed downtrend, risk-off sentiment is already entrenched across markets.`);
+      lines.push(`\n**So What Does This Actually Mean?**\n• The data shows ${results.sampleSize} matching periods where both conditions coincided. In these environments, broad liquidity is typically constrained.\n• Cross-asset sensitivity indicates correlated pressure across risk assets rather than isolated crypto volatility.`);
+      lines.push(`\n**Key Caveats & Limitations**\n• Historical joint regimes reflect severe macro or credit stress; modern institutional participation may alter future transmission dynamics.`);
+    } else {
+      // Asset shock
+      const topSens = results.sensitivityResults[0];
+      const hasAmplified = results.sensitivityResults.some(r => Math.abs(r.betaToShockAsset || 0) > 1.0);
+      lines.push(`**Quick Take**\nA ${mag}% drop in ${targetName} has historically transmitted direct directional pressure across correlated risk assets, with high-beta counterparts experiencing amplified moves.`);
+      lines.push(`\n**So What Does This Actually Mean?**\n• Historical data indicates that when ${targetName} experiences a drawdown of this scale, correlated assets generally move in the same direction.`);
+      if (hasAmplified) {
+        lines.push(`• Assets with beta greater than 1.0 (such as higher-beta crypto) have historically suffered proportionately larger percentage drawdowns.`);
+      }
+      if (results.recoveryStats && results.recoveryStats.avgRecoveryTradingDays) {
+        lines.push(`• Drawdown recovery has historically required approximately ${results.recoveryStats.avgRecoveryTradingDays} trading days to retest pre-shock price levels.`);
+      }
+      lines.push(`\n**Key Caveats & Limitations**\n• Correlations are historical empirical sensitivities, not forecasts. Correlations frequently shift during liquidity events.`);
+    }
+
+    plainEnglishSynthesis = lines.join('\n');
+  }
+
+  results.explanation = plainEnglishSynthesis;
 
   results.impactCalculations = results.sensitivityResults.map(r => ({
     asset: r.asset,

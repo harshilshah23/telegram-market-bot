@@ -1,4 +1,4 @@
-﻿import { getYahooMarketQuote } from '../market_data/yahooMarketData.js';
+import { getYahooMarketQuote } from '../market_data/yahooMarketData.js';
 import { getMarketNews } from '../news/newsAggregator.js';
 import { getUpcomingMacroEvents } from '../events/macroEvents.js';
 import { cache } from '../../cache/cacheManager.js';
@@ -55,28 +55,38 @@ async function generateBriefEditorial(quotes, topNews, macroEvents, regimeInfo) 
   ).join('\n');
 
   if (config.hasLLM && config.hasOpenRouter) {
-    const prompt = `You are a chief investment officer. Write an intelligent, dynamic daily market brief.
-Do NOT force every asset into a cookie-cutter template. Focus on what ACTUALLY MATTERS today based on real data.
+    const prompt = `You are a chief investment officer and plain-English market communicator.
+Write an intelligent, layered daily market briefing for normal investors.
+CRITICAL GOAL: Prioritize INTERPRETATION and NARRATIVE over merely repeating numbers.
+The user wants to know: "So what does this actually mean today?"
 
-MARKET METRICS:
+VERIFIED MARKET DATA:
 ${marketSummary}
 Detected Regime: ${regimeInfo.regime}
 Significant Outliers (>1.5% move): ${regimeInfo.significantMoves.length > 0 ? JSON.stringify(regimeInfo.significantMoves) : 'None, markets are mostly flat/range-bound'}
 
-VERIFIED HEADLINES:
+VERIFIED RECENT HEADLINES:
 ${headlines || 'No major breaking developments.'}
 
-VERIFIED UPCOMING MACRO EVENTS (DO NOT INVENT DATES):
+VERIFIED UPCOMING MACRO EVENTS:
 ${catalysts}
 
-TASK:
-Write:
-1. **WHAT MATTERS TODAY**: 2-3 sentences diagnosing the overarching cross-asset narrative (e.g. why risk appetite is paused or what liquidity flows dominate).
-2. **KEY WATCH LEVELS & UPCOMING CATALYSTS**: Highlight the most critical pivots and upcoming confirmed events.
+CRITICAL RULES:
+1. Ground every claim strictly in the real data above.
+2. If markets or assets are flat (e.g. BTC ~0.0%), describe the consolidation honestly. E.g.: "Risk assets are modestly stronger today, but crypto isn't participating meaningfully. The bigger signal is the divergence between equities and crypto."
+3. Distinguish between:
+   - FACT: What the data directly shows.
+   - INFERENCE: What that evidence reasonably suggests ("The data suggests...", "What stands out is...").
+   - SPECULATION / CAVEAT: What to watch ("The important caveat is..."). Never present speculation as fact.
+4. STRUCTURE YOUR OUTPUT EXACTLY LIKE THIS:
+   **Quick Take**
+   (1-2 clear, punchy sentences in plain English summarizing today's primary cross-asset theme)
 
-RULES:
-- Never manufacture excitement if the market is quiet. State consolidation when true.
-- Strictly use only verified catalyst dates from above.`;
+   **What the Tape is Telling Us**
+   (2-3 bullet points analyzing cross-asset divergence, leadership, or liquidity flows without financial jargon)
+
+   **So What Does This Mean for Investors?**
+   (1-2 sentences on what practical positioning or patience is warranted today)`;
 
     try {
       const url = 'https://openrouter.ai/api/v1/chat/completions';
@@ -105,8 +115,36 @@ RULES:
     }
   }
 
-  // Fallback
-  return `**WHAT MATTERS TODAY**\n${regimeInfo.regime}: Markets are consolidating within tight intraday bands. Capital is waiting on key macro prints rather than aggressively taking directional risk.\n\n**KEY WATCH LEVELS**\n• BTC: Monitoring immediate support at $77,000.\n• S&P 500: Holding above short-term technical averages.`;
+  // Resilient deterministic interpretation fallback
+  const spQ = quotes['^GSPC'];
+  const btcQ = quotes['BTC-USD'];
+  const dxyQ = quotes['DX-Y.NYB'];
+
+  const lines = [];
+  // 1. Quick Take
+  if (spQ && btcQ && spQ.changePercent > 0.5 && Math.abs(btcQ.changePercent) < 0.4) {
+    lines.push(`**Quick Take**\nEquities are pushing higher today, but crypto isn't participating meaningfully. The primary narrative is cross-asset divergence as digital assets remain locked in a holding pattern.`);
+  } else if (regimeInfo.regime.includes('Consolidation')) {
+    lines.push(`**Quick Take**\nMajor asset classes are consolidating within tight intraday bands. Capital is largely on pause awaiting the next scheduled macro data release.`);
+  } else {
+    lines.push(`**Quick Take**\nMarkets are trading under a ${regimeInfo.regime.toLowerCase()} tone, with capital flows reacting to real-time rate and liquidity expectations.`);
+  }
+
+  // 2. What the Tape is Telling Us
+  lines.push(`\n**What the Tape is Telling Us**`);
+  if (spQ && btcQ && Math.abs(spQ.changePercent - btcQ.changePercent) > 0.8) {
+    lines.push(`• Divergence between equities (${spQ.changePercent >= 0 ? '+' : ''}${spQ.changePercent.toFixed(2)}%) and Bitcoin (${btcQ.changePercent >= 0 ? '+' : ''}${btcQ.changePercent.toFixed(2)}%) indicates risk appetite is selective rather than universal.`);
+  } else {
+    lines.push(`• Synchronized low volatility across crypto and equities reflects market-wide indecision and light institutional volume.`);
+  }
+  if (dxyQ) {
+    lines.push(`• The US Dollar Index (${dxyQ.changePercent >= 0 ? '+' : ''}${dxyQ.changePercent.toFixed(2)}%) remains a key pivot for broader asset valuations.`);
+  }
+
+  // 3. So What Does This Mean?
+  lines.push(`\n**So What Does This Mean for Investors?**\n• When price action lacks clear trend confirmation, chasing breakouts carries elevated false-start risk. Monitoring confirmed macro catalysts is the highest-probability strategy.`);
+
+  return lines.join('\n');
 }
 
 export async function getDailyMarketBrief() {

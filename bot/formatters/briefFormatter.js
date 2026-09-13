@@ -14,7 +14,15 @@ export function formatMarketBrief(briefData) {
   const lines = [];
   lines.push(`📰 <b>GLOBAL MARKET BRIEF</b> — <i>${dateStr}</i>`);
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
-  lines.push(`<b>MARKET OVERVIEW</b>`);
+
+  // 1. Editorial / Plain-English Takeaway FIRST
+  if (editorial) {
+    lines.push(markdownToTelegramHtml(editorial));
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  }
+
+  // 2. Market Data Overview (Supporting Evidence)
+  lines.push(`<b>WHAT THE DATA SHOWS</b>`);
 
   for (const asset of BRIEF_ASSETS) {
     const q = quotes[asset.symbol];
@@ -31,10 +39,6 @@ export function formatMarketBrief(briefData) {
   }
 
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
-  if (editorial) {
-    lines.push(markdownToTelegramHtml(editorial));
-    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
-  }
 
   if (macroEvents && macroEvents.length > 0) {
     lines.push(`<b>UPCOMING CATALYSTS</b>`);

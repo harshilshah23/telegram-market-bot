@@ -1,4 +1,4 @@
-﻿import { resolveSymbol } from '../resolver/symbolResolver.js';
+import { resolveSymbol } from '../resolver/symbolResolver.js';
 import { getYahooMarketQuote } from '../market_data/yahooMarketData.js';
 import { getMarketNews } from '../news/newsAggregator.js';
 import { getUpcomingMacroEvents } from '../events/macroEvents.js';
@@ -115,8 +115,9 @@ export async function answerMarketQuestion(question) {
     `- ${c.title} (Verified calendar date: ${c.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`
   ).join('\n');
 
-  const prompt = `You are an institutional Wall Street research analyst.
+  const prompt = `You are a senior market analyst and plain-English financial communicator.
 Answer the user's market question with objective, grounded market intelligence.
+The user wants an answer in normal human language first, followed by clear supporting evidence.
 
 USER QUESTION: "${question}"
 PARSED RESEARCH INTENT: ${JSON.stringify(intent)}
@@ -131,16 +132,27 @@ ${headlinesSummary}
 VERIFIED UPCOMING MACRO CATALYSTS:
 ${catalystsSummary}
 
-${falsePremiseWarning ? `CRITICAL PREMISE NOTICE:\n${falsePremiseWarning}\nYou MUST begin your response by explicitly stating this premise correction.` : ''}
+${falsePremiseWarning ? `CRITICAL PREMISE NOTICE:\n${falsePremiseWarning}\nYou MUST begin your Quick Take by explicitly addressing this premise correction.` : ''}
 
-INSTRUCTIONS:
-1. Clearly distinguish between:
-   - **Observed Market Facts:** (State real-time prices, percentage moves, and relative performance accurately).
-   - **Supported Explanations vs Speculation:** (Cite news sources directly if they explain market sentiment; if there is no verified single catalyst, state that explicitly).
-   - **Key Catalysts to Watch:** (List top scheduled events using strictly the verified calendar dates above).
-2. NEVER invent a reason for a move if the market is quiet or flat.
-3. NEVER fabricate event dates or percentages.
-4. Keep it concise, analytical, institutional. No financial advice.`;
+CRITICAL RULES:
+1. Answer the user's actual question directly in the very first sentence.
+2. Distinguish clearly between:
+   - FACT: What the real-time data directly shows (e.g. BTC is at $77,270, up +0.03%).
+   - INFERENCE: What that evidence reasonably suggests ("The data suggests...", "What stands out is...").
+   - SPECULATION / CAVEAT: What could happen or limitations ("The important caveat is..."). Never present speculation as fact.
+3. NEVER invent a narrative for a move if the market is quiet or essentially flat. State consolidation directly.
+4. STRUCTURE YOUR RESPONSE WITH THESE EXACT SECTIONS:
+   **Quick Take**
+   (1-2 plain-English sentences answering the user's question directly with zero jargon)
+
+   **What the Data Shows**
+   (Bullet points summarizing current prices, verified performance numbers, and relevant verified headlines)
+
+   **So What Does This Mean?**
+   (2-3 grounded inference points translating what the consolidation, move, or catalyst means for an investor)
+
+   **Key Catalysts to Watch**
+   (Bullet points of upcoming confirmed macro events with verified calendar dates)`;
 
   let responseText = null;
 
@@ -173,21 +185,38 @@ INSTRUCTIONS:
 
   if (!responseText) {
     const lines = [];
+    // 1. Quick Take
     if (falsePremiseWarning) {
-      lines.push(`**Premise Check:** ${falsePremiseWarning}\n`);
-    }
-    lines.push(`**Observed Market Facts:** ${quoteSummary}`);
-    if (compQuoteSummary) lines.push(compQuoteSummary);
-
-    if (filteredNews.length > 0) {
-      lines.push(`\n**Supported Explanations:**`);
-      filteredNews.forEach(n => lines.push(`• ${n.title} (*${n.source}*)`));
+      lines.push(`**Quick Take**\n${falsePremiseWarning}`);
+    } else if (isEssentiallyFlat) {
+      lines.push(`**Quick Take**\n${primaryAsset.symbol} is essentially flat today, trading in a tight consolidation range without a dominant directional driver.`);
     } else {
-      lines.push(`\n**Supported Explanations:** Price action reflects consolidation with no single breaking fundamental catalyst.`);
+      const dir = primaryQuote?.changePercent >= 0 ? 'higher' : 'lower';
+      lines.push(`**Quick Take**\n${primaryAsset.symbol} is moving ${dir} by ${primaryQuote?.changePercent?.toFixed(2)}%, driven by broader market sentiment and macro positioning.`);
     }
 
+    // 2. What the Data Shows
+    lines.push(`\n**What the Data Shows**`);
+    lines.push(`• ${quoteSummary}`);
+    if (compQuoteSummary) lines.push(`• ${compQuoteSummary}`);
+    if (filteredNews.length > 0) {
+      filteredNews.forEach(n => lines.push(`• Headline: "${n.title}" (*${n.source}*)`));
+    } else {
+      lines.push(`• No breaking single fundamental catalyst reported in recent news flow.`);
+    }
+
+    // 3. So What Does This Mean?
+    lines.push(`\n**So What Does This Mean?**`);
+    if (isEssentiallyFlat) {
+      lines.push(`• The market is in a wait-and-see holding pattern rather than pricing in an immediate shock.`);
+      lines.push(`• Volume and volatility are compressed, meaning the next decisive move will likely hinge on upcoming macro data.`);
+    } else {
+      lines.push(`• Price action reflects active positioning across risk assets, though sustained continuation will require supporting macro follow-through.`);
+    }
+
+    // 4. Catalysts to Watch
     if (catalysts.length > 0) {
-      lines.push(`\n**Upcoming Catalysts to Watch:**`);
+      lines.push(`\n**Key Catalysts to Watch**`);
       catalysts.forEach(c => lines.push(`• ${c.title} (*${c.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}*)`));
     }
 
