@@ -2,6 +2,7 @@ import { Bot } from 'grammy';
 import { config } from '../config/index.js';
 import { handleStartCommand, handleHelpCommand, handleBtcShortcut, handleEthShortcut } from './handlers/commandHandler.js';
 import { handleTickerCommand } from './handlers/tickerHandler.js';
+import { handleBacktestCommand } from './handlers/backtestHandler.js';
 import { handleCallbackQuery } from './handlers/callbackHandler.js';
 
 export function createBot() {
@@ -17,6 +18,7 @@ export function createBot() {
   bot.command('start', handleStartCommand);
   bot.command('help', handleHelpCommand);
   bot.command('ticker', handleTickerCommand);
+  bot.command('backtest', handleBacktestCommand);
   bot.command('btc', handleBtcShortcut);
   bot.command('eth', handleEthShortcut);
 

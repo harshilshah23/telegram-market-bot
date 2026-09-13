@@ -17,6 +17,14 @@ const STATIC_ALIASES = {
   'ADA': { symbol: 'ADA-USD', name: 'Cardano', type: 'crypto', baseSymbol: 'ADA' },
   'CARDANO': { symbol: 'ADA-USD', name: 'Cardano', type: 'crypto', baseSymbol: 'ADA' },
 
+  // Common Company Names
+  'NVIDIA': { symbol: 'NVDA', name: 'NVIDIA Corporation', type: 'equity' },
+  'TESLA': { symbol: 'TSLA', name: 'Tesla, Inc.', type: 'equity' },
+  'APPLE': { symbol: 'AAPL', name: 'Apple Inc.', type: 'equity' },
+  'MICROSOFT': { symbol: 'MSFT', name: 'Microsoft Corporation', type: 'equity' },
+  'AMAZON': { symbol: 'AMZN', name: 'Amazon.com, Inc.', type: 'equity' },
+  'GOOGLE': { symbol: 'GOOGL', name: 'Alphabet Inc.', type: 'equity' },
+
   // Commodities
   'GOLD': { symbol: 'GC=F', name: 'Gold Futures', type: 'commodity' },
   'XAU': { symbol: 'GC=F', name: 'Gold Futures', type: 'commodity' },
