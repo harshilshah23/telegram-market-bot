@@ -35,10 +35,22 @@ export function getUpcomingMacroEvents(referenceDate = new Date()) {
       });
     }
 
-    // CPI: Typically second Wednesday/Thursday of the month (~11th)
-    const cpiDate = new Date(targetYear, targetMonth, 11, 12, 30);
-    // Buffer: Must be at least 24 hours in the future to be considered upcoming
-    if (cpiDate.getTime() > referenceDate.getTime() + 24 * 3600 * 1000) {
+    // CPI: Second Wednesday or Thursday of the target month
+    // Find second Wednesday
+    let cpiDate = null;
+    let wednesdayCount = 0;
+    for (let d = 1; d <= 21; d++) {
+      const cur = new Date(targetYear, targetMonth, d, 12, 30);
+      if (cur.getDay() === 3) { // Wednesday
+        wednesdayCount++;
+        if (wednesdayCount === 2) {
+          cpiDate = cur;
+          break;
+        }
+      }
+    }
+
+    if (cpiDate && cpiDate.getTime() > referenceDate.getTime() + 24 * 3600 * 1000) {
       events.push({
         title: 'US CPI Inflation Print',
         date: cpiDate,
@@ -48,9 +60,21 @@ export function getUpcomingMacroEvents(referenceDate = new Date()) {
       });
     }
 
-    // PPI: ~13th of each month
-    const ppiDate = new Date(targetYear, targetMonth, 13, 12, 30);
-    if (ppiDate.getTime() > referenceDate.getTime() + 24 * 3600 * 1000) {
+    // PPI: Second Thursday or Friday of the month
+    let ppiDate = null;
+    let thursdayCount = 0;
+    for (let d = 1; d <= 21; d++) {
+      const cur = new Date(targetYear, targetMonth, d, 12, 30);
+      if (cur.getDay() === 4) { // Thursday
+        thursdayCount++;
+        if (thursdayCount === 2) {
+          ppiDate = cur;
+          break;
+        }
+      }
+    }
+
+    if (ppiDate && ppiDate.getTime() > referenceDate.getTime() + 24 * 3600 * 1000) {
       events.push({
         title: 'US PPI Wholesale Inflation',
         date: ppiDate,

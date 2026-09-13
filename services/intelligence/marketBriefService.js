@@ -123,26 +123,26 @@ CRITICAL RULES:
   const lines = [];
   // 1. Quick Take
   if (spQ && btcQ && spQ.changePercent > 0.5 && Math.abs(btcQ.changePercent) < 0.4) {
-    lines.push(`**Quick Take**\nEquities are pushing higher today, but crypto isn't participating meaningfully. The primary narrative is cross-asset divergence as digital assets remain locked in a holding pattern.`);
+    lines.push(`**Quick Take**\nEquities are moving higher today while Bitcoin is essentially flat (+${btcQ.changePercent.toFixed(2)}%). The primary observation is cross-asset divergence between traditional equities and crypto.`);
   } else if (regimeInfo.regime.includes('Consolidation')) {
-    lines.push(`**Quick Take**\nMajor asset classes are consolidating within tight intraday bands. Capital is largely on pause awaiting the next scheduled macro data release.`);
+    lines.push(`**Quick Take**\nMajor asset classes are trading within narrow intraday ranges, showing flat performance across both crypto and equity indices.`);
   } else {
-    lines.push(`**Quick Take**\nMarkets are trading under a ${regimeInfo.regime.toLowerCase()} tone, with capital flows reacting to real-time rate and liquidity expectations.`);
+    lines.push(`**Quick Take**\nMarkets are exhibiting a ${regimeInfo.regime.toLowerCase()} pattern based on today's cross-asset returns.`);
   }
 
   // 2. What the Tape is Telling Us
   lines.push(`\n**What the Tape is Telling Us**`);
   if (spQ && btcQ && Math.abs(spQ.changePercent - btcQ.changePercent) > 0.8) {
-    lines.push(`• Divergence between equities (${spQ.changePercent >= 0 ? '+' : ''}${spQ.changePercent.toFixed(2)}%) and Bitcoin (${btcQ.changePercent >= 0 ? '+' : ''}${btcQ.changePercent.toFixed(2)}%) indicates risk appetite is selective rather than universal.`);
+    lines.push(`• **Equity vs Crypto Divergence**: S&P 500 (${spQ.changePercent >= 0 ? '+' : ''}${spQ.changePercent.toFixed(2)}%) is advancing while Bitcoin (${btcQ.changePercent >= 0 ? '+' : ''}${btcQ.changePercent.toFixed(2)}%) remains unchanged, showing lack of co-movement today.`);
   } else {
-    lines.push(`• Synchronized low volatility across crypto and equities reflects market-wide indecision and light institutional volume.`);
+    lines.push(`• **Compressed Daily Returns**: Key benchmark changes remain below 0.5%, indicating range-bound trading.`);
   }
   if (dxyQ) {
-    lines.push(`• The US Dollar Index (${dxyQ.changePercent >= 0 ? '+' : ''}${dxyQ.changePercent.toFixed(2)}%) remains a key pivot for broader asset valuations.`);
+    lines.push(`• **US Dollar Index**: DXY is at ${dxyQ.price} (${dxyQ.changePercent >= 0 ? '+' : ''}${dxyQ.changePercent.toFixed(2)}%), indicating modest currency movement.`);
   }
 
   // 3. So What Does This Mean?
-  lines.push(`\n**So What Does This Mean for Investors?**\n• When price action lacks clear trend confirmation, chasing breakouts carries elevated false-start risk. Monitoring confirmed macro catalysts is the highest-probability strategy.`);
+  lines.push(`\n**So What Does This Mean for Investors?**\n• The data suggests selective asset behavior rather than a broad market-wide trend. Without strong directional confirmation across multiple asset classes, historical precedent favors waiting for catalyst confirmation.`);
 
   return lines.join('\n');
 }

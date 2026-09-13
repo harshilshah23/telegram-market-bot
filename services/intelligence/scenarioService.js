@@ -351,20 +351,24 @@ ${results.sensitivityResults.length > 0 ? 'Sensitivities:\n' + JSON.stringify(re
 ${results.historicalPrecedents.length > 0 ? 'Historical Occurrences Post-Event Performance:\n' + JSON.stringify(results.historicalPrecedents, null, 2) : ''}
 ${results.recoveryStats ? 'Recovery Statistics:\n' + JSON.stringify(results.recoveryStats, null, 2) : ''}
 
-CRITICAL COMMUNICATION GUIDELINES:
-1. Translate quantitative metrics (beta, correlation, recovery days) into intuitive takeaways.
-   - e.g. Instead of just "Beta is 1.13, Corr 0.84", explain: "ETH has historically moved in the same direction as BTC during comparable selloffs, often with an amplified percentage move. That relationship is strong historically, but not a guaranteed outcome."
-2. Ground all inferences strictly in the calculated numbers above. Never invent facts or unsupported narratives.
+CRITICAL INFERENCE & CALIBRATION RULES:
+1. Ground every claim STRICTLY in the calculated data. Never produce an inference stronger than the evidence supports.
+2. RELATIONSHIP STRENGTH:
+   - |Correlation| < 0.20: Relationship is WEAK/NEGLIGIBLE. State clearly that the historical relationship is weak and provides little directional or predictive signal. NEVER say assets "move together" or "risk assets get pressured" if correlation is negligible.
+   - |Correlation| 0.20 - 0.50: Moderate/notable relationship. Note the direction (e.g. inverse for negative correlation like Gold vs DXY).
+   - |Correlation| > 0.50: Strong co-movement.
 3. Distinguish clearly between:
-   - FACT: What the data directly shows.
-   - INFERENCE: What that evidence reasonably suggests ("Historically, this has tended to...", "The data suggests...", "What stands out is...").
-   - SPECULATION / CAVEAT: What could happen or limitations ("The important caveat is...", "Historical relationships are empirical sensitivities, not guarantees").
-4. STRUCTURE YOUR RESPONSE WITH THESE EXACT SECTIONS:
+   - FACT: What the numbers directly show (e.g. "BTC correlation to Gold is 0.06, DXY correlation is -0.37").
+   - INFERENCE: What that evidence reasonably suggests ("The strongest relationship in this sample is...", "The evidence is weak for...").
+   - SPECULATION / CAVEAT: Potential scenarios or limitations ("Historical relationships are empirical sensitivities, not guarantees").
+4. Prohibited phrases unless directly proven by evidence:
+   - Do NOT say "liquidity is driving the move", "risk assets will move together", or "the next move will hinge on..." unless evidence specifically supports it.
+5. STRUCTURE YOUR RESPONSE WITH THESE EXACT SECTIONS:
    **Quick Take**
-   (1-2 clear, punchy sentences in normal human language summarizing the primary takeaway)
+   (1-2 clear, grounded sentences in normal human language summarizing the primary takeaway)
 
    **So What Does This Actually Mean?**
-   (2-3 bullet points translating the data into practical insights: how the assets relate, what the recovery timeline looks like, and what the key dynamic is)
+   (2-3 bullet points translating the data: which relationships are real, which are weak/unreliable, and what the recovery timeline looks like)
 
    **Key Caveats & Limitations**
    (1-2 sentences on sample size, shifting regimes, or why past moves aren't guarantees)`;
@@ -406,26 +410,53 @@ CRITICAL COMMUNICATION GUIDELINES:
     const isNegative = results.shock.direction === 'negative';
 
     if (results.scenarioType === 'macro_event') {
-      lines.push(`**Quick Take**\nHistorically, central bank rate reductions provide liquidity support over medium horizons, though immediate 1-to-7 day market reactions are frequently volatile depending on broader macro conditions.`);
-      lines.push(`\n**So What Does This Actually Mean?**\n• Rate cuts reduce borrowing costs and tend to weaken the domestic currency, which historically aids risk appetite over 30-day windows.\n• In the verified historical instances recorded, immediate post-cut performance varied significantly based on whether the cut was preemptive easing or responding to systemic stress.`);
+      lines.push(`**Quick Take**\nHistorically, central bank rate reductions provide liquidity support over medium horizons, though immediate 1-to-7 day market reactions vary considerably based on broader macro conditions.`);
+      lines.push(`\n**So What Does This Actually Mean?**\n• In the verified historical instances recorded, immediate post-cut performance varied significantly depending on whether the action was preemptive or crisis response.\n• Medium-term (30-day) trajectories generally reflect whether easing stabilized macroeconomic conditions.`);
       lines.push(`\n**Key Caveats & Limitations**\n• With ${results.sampleSize} historical instances, outcomes should be viewed as illustrative precedent rather than statistical certainty.`);
     } else if (results.scenarioType === 'conditional_scenario') {
-      lines.push(`**Quick Take**\nWhen ${targetName} suffers a sharp drop while benchmark equities are already in a confirmed downtrend, risk-off sentiment is already entrenched across markets.`);
-      lines.push(`\n**So What Does This Actually Mean?**\n• The data shows ${results.sampleSize} matching periods where both conditions coincided. In these environments, broad liquidity is typically constrained.\n• Cross-asset sensitivity indicates correlated pressure across risk assets rather than isolated crypto volatility.`);
-      lines.push(`\n**Key Caveats & Limitations**\n• Historical joint regimes reflect severe macro or credit stress; modern institutional participation may alter future transmission dynamics.`);
+      lines.push(`**Quick Take**\nWhen ${targetName} drops while benchmark equities are already in a confirmed downtrend, broader market weakness reinforces selling pressure.`);
+      lines.push(`\n**So What Does This Actually Mean?**\n• The data identifies ${results.sampleSize} matching periods where both conditions occurred simultaneously.\n• During these joint stress regimes, historical forward performance reflects prolonged chop rather than an immediate V-shaped bounce.`);
+      lines.push(`\n**Key Caveats & Limitations**\n• Historical joint regimes reflect severe macro stress; modern institutional participation may alter future transmission dynamics.`);
     } else {
-      // Asset shock
-      const topSens = results.sensitivityResults[0];
-      const hasAmplified = results.sensitivityResults.some(r => Math.abs(r.betaToShockAsset || 0) > 1.0);
-      lines.push(`**Quick Take**\nA ${mag}% drop in ${targetName} has historically transmitted direct directional pressure across correlated risk assets, with high-beta counterparts experiencing amplified moves.`);
-      lines.push(`\n**So What Does This Actually Mean?**\n• Historical data indicates that when ${targetName} experiences a drawdown of this scale, correlated assets generally move in the same direction.`);
-      if (hasAmplified) {
-        lines.push(`• Assets with beta greater than 1.0 (such as higher-beta crypto) have historically suffered proportionately larger percentage drawdowns.`);
+      // Asset shock - Evaluate actual relationship strengths
+      const strong = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) >= 0.5);
+      const moderate = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) >= 0.2 && Math.abs(r.correlation || 0) < 0.5);
+      const weak = results.sensitivityResults.filter(r => Math.abs(r.correlation || 0) < 0.2);
+
+      if (strong.length > 0) {
+        const sNames = strong.map(r => r.asset).join(', ');
+        lines.push(`**Quick Take**\nA ${mag}% drop in ${targetName} shows strong historical co-movement with ${sNames}, while other assets show substantially weaker linkage.`);
+      } else if (moderate.length > 0) {
+        const m = moderate[0];
+        const dir = m.correlation < 0 ? 'inverse' : 'positive';
+        lines.push(`**Quick Take**\nA ${mag}% move in ${targetName} shows its clearest statistical relationship with ${m.asset} (moderate ${dir} correlation of ${m.correlation}), while relationships with other assets are weak.`);
+      } else {
+        lines.push(`**Quick Take**\nA ${mag}% move in ${targetName} has historically had little statistical transmission to the analyzed assets, with correlations remaining near zero.`);
       }
+
+      lines.push(`\n**So What Does This Actually Mean?**`);
+      if (moderate.length > 0) {
+        moderate.forEach(m => {
+          const rel = m.correlation < 0 ? 'an inverse relationship (tending to move in opposite directions)' : 'a moderate directional relationship';
+          lines.push(`• **${m.asset}**: Shows ${rel} with ${targetName} (correlation ${m.correlation}).`);
+        });
+      }
+      if (strong.length > 0) {
+        strong.forEach(s => {
+          const amp = Math.abs(s.betaToShockAsset || 0) > 1.0 ? 'often experiencing larger percentage swings' : 'tracking in proportion';
+          lines.push(`• **${s.asset}**: Demonstrates strong historical correlation (${s.correlation}) to ${targetName}, ${amp}.`);
+        });
+      }
+      if (weak.length > 0) {
+        const wNames = weak.map(w => `${w.asset} (corr ${w.correlation})`).join(', ');
+        lines.push(`• **Weak Linkages**: Historical evidence for ${wNames} is statistically weak, meaning ${targetName}'s move provides little reliable directional signal.`);
+      }
+
       if (results.recoveryStats && results.recoveryStats.avgRecoveryTradingDays) {
-        lines.push(`• Drawdown recovery has historically required approximately ${results.recoveryStats.avgRecoveryTradingDays} trading days to retest pre-shock price levels.`);
+        lines.push(`• **Recovery Timeline**: For ${targetName} itself, recovering pre-shock price levels took an average of ${results.recoveryStats.avgRecoveryTradingDays} trading days across ${results.recoveryStats.occurrences} historical occurrences.`);
       }
-      lines.push(`\n**Key Caveats & Limitations**\n• Correlations are historical empirical sensitivities, not forecasts. Correlations frequently shift during liquidity events.`);
+
+      lines.push(`\n**Key Caveats & Limitations**\n• Historical relationships are empirical correlations from a 5Y sample, not mechanical rules. Macro regime shifts frequently break past correlations.`);
     }
 
     plainEnglishSynthesis = lines.join('\n');

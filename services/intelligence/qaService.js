@@ -140,7 +140,10 @@ CRITICAL RULES:
    - FACT: What the real-time data directly shows (e.g. BTC is at $77,270, up +0.03%).
    - INFERENCE: What that evidence reasonably suggests ("The data suggests...", "What stands out is...").
    - SPECULATION / CAVEAT: What could happen or limitations ("The important caveat is..."). Never present speculation as fact.
-3. NEVER invent a narrative for a move if the market is quiet or essentially flat. State consolidation directly.
+3. NEVER invent unmeasured market claims:
+   - If volume was not retrieved/measured, DO NOT claim "volume is compressed" or "liquidity is thin".
+   - If volatility was not calculated, DO NOT claim "volatility is compressed".
+   - If markets are flat, state flat consolidation directly based on the reported percentage.
 4. STRUCTURE YOUR RESPONSE WITH THESE EXACT SECTIONS:
    **Quick Take**
    (1-2 plain-English sentences answering the user's question directly with zero jargon)
@@ -192,7 +195,7 @@ CRITICAL RULES:
       lines.push(`**Quick Take**\n${primaryAsset.symbol} is essentially flat today, trading in a tight consolidation range without a dominant directional driver.`);
     } else {
       const dir = primaryQuote?.changePercent >= 0 ? 'higher' : 'lower';
-      lines.push(`**Quick Take**\n${primaryAsset.symbol} is moving ${dir} by ${primaryQuote?.changePercent?.toFixed(2)}%, driven by broader market sentiment and macro positioning.`);
+      lines.push(`**Quick Take**\n${primaryAsset.symbol} is moving ${dir} by ${primaryQuote?.changePercent?.toFixed(2)}% over the past 24 hours.`);
     }
 
     // 2. What the Data Shows
@@ -208,10 +211,10 @@ CRITICAL RULES:
     // 3. So What Does This Mean?
     lines.push(`\n**So What Does This Mean?**`);
     if (isEssentiallyFlat) {
-      lines.push(`• The market is in a wait-and-see holding pattern rather than pricing in an immediate shock.`);
-      lines.push(`• Volume and volatility are compressed, meaning the next decisive move will likely hinge on upcoming macro data.`);
+      lines.push(`• The data indicates price consolidation rather than an active directional trend.`);
+      lines.push(`• Without a breaking fundamental news catalyst, trading reflects routine balance between buyers and sellers.`);
     } else {
-      lines.push(`• Price action reflects active positioning across risk assets, though sustained continuation will require supporting macro follow-through.`);
+      lines.push(`• The recorded price change reflects measurable directional momentum, supported by recent headline flow.`);
     }
 
     // 4. Catalysts to Watch
