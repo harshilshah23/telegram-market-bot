@@ -35,7 +35,8 @@ export function createBot() {
   bot.on('message:text', async (ctx) => {
     const text = ctx.message?.text?.trim() || '';
     if (text.startsWith('/')) return; // ignore commands
-    if (text.length > 0 && text.length < 50 && !text.includes('\n')) {
+    // Only query if text looks like a ticker symbol or company name (alphanumeric with spaces/dots)
+    if (text.length > 0 && text.length < 50 && !text.includes('\n') && /^[a-zA-Z0-9\s.\-=]+$/.test(text)) {
       return handleTickerCommand(ctx, text);
     }
   });

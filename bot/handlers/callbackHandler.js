@@ -9,6 +9,9 @@ export async function handleCallbackQuery(ctx) {
   const data = ctx.callbackQuery?.data;
   if (!data) return;
 
+  // Helper to safely answer callbacks even if query is old/expired
+  const safeAnswer = (opts) => ctx.answerCallbackQuery(opts).catch(() => {});
+
   // 1. Existing /ticker refresh handler (Untouched)
   if (data.startsWith('refresh:')) {
     const symbol = data.replace('refresh:', '');

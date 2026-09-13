@@ -172,7 +172,7 @@ export function parseStrategyDeterministic(prompt) {
   }
 
   // D) RSI rules
-  const rsiBuyMatch = text.match(/(?:([A-Za-z]+)\s+)?rsi\s*(?:is\s*)?(?:below|<|less than)\s*(\d+)/i);
+  const rsiBuyMatch = text.match(/(?:([A-Za-z]+)\s+)?rsi\s*(?:is\s*|drops\s*|falls\s*|goes\s*)?(?:below|<|less than)\s*(\d+)/i);
   if (rsiBuyMatch) {
     const rawWord = rsiBuyMatch[1] ? rsiBuyMatch[1].toUpperCase() : null;
     const targetAsset = (rawWord && COMMON_ASSETS.includes(rawWord)) ? normalizeSymbol(rawWord) : strategy.asset;
@@ -217,7 +217,7 @@ export function parseStrategyDeterministic(prompt) {
   }
 
   // 9. Extract Exit Conditions
-  const rsiSellMatch = text.match(/rsi\s*(?:goes\s*above|>|crosses\s*above|greater than)\s*(\d+)/i);
+  const rsiSellMatch = text.match(/rsi\s*(?:is\s*|goes\s*|rises\s*|crosses\s*|climbs\s*)?(?:above|>|greater than)\s*(\d+)/i);
   if (rsiSellMatch) {
     strategy.exitConditions.push({
       indicator: 'RSI',
