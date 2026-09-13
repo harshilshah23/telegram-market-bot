@@ -9,7 +9,7 @@
  * - CPI: Typically second Wednesday/Thursday of the month
  * - FOMC: Scheduled Fed meetings
  */
-function getUpcomingMacroEvents(referenceDate = new Date()) {
+export function getUpcomingMacroEvents(referenceDate = new Date()) {
   const events = [];
   const year = referenceDate.getFullYear();
   const month = referenceDate.getMonth(); // 0-indexed

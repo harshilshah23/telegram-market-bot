@@ -3,6 +3,9 @@ import { config } from '../config/index.js';
 import { handleStartCommand, handleHelpCommand, handleBtcShortcut, handleEthShortcut } from './handlers/commandHandler.js';
 import { handleTickerCommand } from './handlers/tickerHandler.js';
 import { handleBacktestCommand } from './handlers/backtestHandler.js';
+import { handleAskCommand } from './handlers/askHandler.js';
+import { handleBriefCommand } from './handlers/briefHandler.js';
+import { handleScenarioCommand } from './handlers/scenarioHandler.js';
 import { handleCallbackQuery } from './handlers/callbackHandler.js';
 
 export function createBot() {
@@ -19,6 +22,9 @@ export function createBot() {
   bot.command('help', handleHelpCommand);
   bot.command('ticker', handleTickerCommand);
   bot.command('backtest', handleBacktestCommand);
+  bot.command('ask', handleAskCommand);
+  bot.command('brief', handleBriefCommand);
+  bot.command('scenario', handleScenarioCommand);
   bot.command('btc', handleBtcShortcut);
   bot.command('eth', handleEthShortcut);
 

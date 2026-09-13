@@ -195,5 +195,79 @@ export async function handleCallbackQuery(ctx) {
       '<i>Example:</i> Change your parameters, indicators, or add a stop-loss / take-profit.',
       { parse_mode: 'HTML' }
     );
+    return;
+  }
+
+  // 9. /brief refresh
+  if (data === 'brief:refresh') {
+    await ctx.answerCallbackQuery({ text: 'Refreshing Global Market Brief...' });
+    try {
+      cache.del('market:daily_brief');
+      const { getDailyMarketBrief } = await import('../../services/intelligence/marketBriefService.js');
+      const { formatMarketBrief } = await import('../formatters/briefFormatter.js');
+      const { getBriefKeyboard } = await import('../keyboards/briefKeyboard.js');
+
+      const briefData = await getDailyMarketBrief();
+      const html = formatMarketBrief(briefData);
+      const keyboard = getBriefKeyboard();
+
+      await ctx.editMessageText(html, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+        disable_web_page_preview: true
+      });
+    } catch (err) {
+      console.error('Error in brief:refresh callback:', err);
+    }
+    return;
+  }
+
+  // 10. /brief view specific asset
+  if (data.startsWith('brief:view:')) {
+    const symbol = data.replace('brief:view:', '');
+    await ctx.answerCallbackQuery({ text: `Loading ${symbol}...` });
+    try {
+      const result = await getMarketIntelligence(symbol);
+      if (result.success) {
+        await ctx.reply(result.html, {
+          parse_mode: 'HTML',
+          reply_markup: result.keyboard,
+          disable_web_page_preview: true
+        });
+      }
+    } catch (err) {
+      console.error('Error in brief:view callback:', err);
+    }
+    return;
+  }
+
+  // 11. /scenario backtest bridge
+  if (data.startsWith('scen:bt:')) {
+    const parts = data.split(':');
+    const asset = parts[2] || 'BTC';
+    const shockPct = parts[3] || '10';
+    await ctx.answerCallbackQuery();
+    const strategyPrompt = `buy ${asset} whenever it drops ${shockPct}% from its 30 day high and sell when it recovers`;
+    await ctx.reply(
+      `🧪 <b>Triggering Backtest for Scenario:</b>\n<code>/backtest ${escapeHtml(strategyPrompt)}</code>\n\n<i>Simulating rule...</i>`,
+      { parse_mode: 'HTML' }
+    );
+    const { handleBacktestCommand } = await import('./backtestHandler.js');
+    ctx.match = strategyPrompt;
+    return handleBacktestCommand(ctx);
+  }
+
+  // 12. /ask backtest bridge
+  if (data.startsWith('ask:backtest:')) {
+    const asset = data.replace('ask:backtest:', '');
+    await ctx.answerCallbackQuery();
+    const strategyPrompt = `${asset} buy when RSI is below 30 and sell when RSI goes above 70`;
+    await ctx.reply(
+      `🧪 <b>Running Mean-Reversion Backtest:</b>\n<code>/backtest ${escapeHtml(strategyPrompt)}</code>`,
+      { parse_mode: 'HTML' }
+    );
+    const { handleBacktestCommand } = await import('./backtestHandler.js');
+    ctx.match = strategyPrompt;
+    return handleBacktestCommand(ctx);
   }
 }
