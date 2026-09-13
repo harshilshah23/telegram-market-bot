@@ -97,13 +97,15 @@ export function parseStrategyDeterministic(prompt) {
     strategy.leverage = parseFloat(leverageMatch[1] || leverageMatch[2]) || 1.0;
   }
 
-  // 6. Stop Loss & Take Profit (e.g., "stop loss at 4%", "take profit at 8%")
-  const slMatch = text.match(/(?:stop\s*loss|sl)\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)\s*%/i);
+  // 6. Stop Loss & Take Profit (e.g., "stop loss at 4%", "down 4%", "take profit when it gets back up 8%")
+  const slMatch = text.match(/(?:stop\s*loss|sl)\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)\s*%/i) ||
+                  text.match(/(?:get\s*out|exit|stop)\s+if\s+(?:i(?:['’]m|\s+am)\s+)?down\s*(\d+(?:\.\d+)?)\s*%/i);
   if (slMatch) {
     strategy.stopLossPct = parseFloat(slMatch[1]);
   }
 
-  const tpMatch = text.match(/(?:take\s*profit|tp)\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)\s*%/i);
+  const tpMatch = text.match(/(?:take\s*(?:the\s*)?profit|tp)\s*(?:when\s+(?:it\s+)?(?:gets\s*back\s*up|rises|reaches))?\s*(\d+(?:\.\d+)?)\s*%/i) ||
+                  text.match(/(?:take\s*(?:the\s*)?profit|tp)\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)\s*%/i);
   if (tpMatch) {
     strategy.takeProfitPct = parseFloat(tpMatch[1]);
   }
@@ -128,8 +130,8 @@ export function parseStrategyDeterministic(prompt) {
     });
   }
 
-  // B) Moving average filter / condition (e.g. "BTC is above its 200 day EMA", "above 200 SMA")
-  const maFilterMatch = text.match(/(?:([A-Za-z]+)\s+is\s+)?(above|below)\s*(?:its|the)?\s*(\d+)(?:-|\s*)?(?:day\s*)?(ema|sma|moving\s*average)/i);
+  // B) Moving average filter / condition (e.g. "BTC is above its 200 day EMA", "above its 200 day average", "above 200 SMA")
+  const maFilterMatch = text.match(/(?:([A-Za-z]+)\s+is\s+)?(?:still\s+)?(above|below)\s*(?:its|the)?\s*(\d+)(?:-|\s*)?(?:day\s*)?(ema|sma|moving\s*average|average)/i);
   if (maFilterMatch) {
     const rawWord = maFilterMatch[1] ? maFilterMatch[1].toUpperCase() : null;
     const targetAsset = (rawWord && COMMON_ASSETS.includes(rawWord)) ? normalizeSymbol(rawWord) : strategy.asset;
@@ -146,7 +148,30 @@ export function parseStrategyDeterministic(prompt) {
     });
   }
 
-  // C) RSI rules
+  // C) Drawdown from rolling High (e.g. "drops 10% from its 30 day high", "falls around 10% from its recent high")
+  const highDdMatch = text.match(/(?:drops?|falls?)\s*(?:around|more than|by)?\s*(\d+(?:\.\d+)?)\s*%\s*from\s*(?:its\s*)?(?:(\d+)\s*(?:day|bar)?\s*high|recent\s*high)/i);
+  if (highDdMatch) {
+    const dropPct = parseFloat(highDdMatch[1]);
+    const lookback = highDdMatch[2] ? parseInt(highDdMatch[2], 10) : 30; // default 30 days for recent high
+    strategy.entryConditions.push({
+      indicator: 'HIGH_DRAWDOWN',
+      asset: strategy.asset,
+      lookbackBars: lookback,
+      dropPct,
+      operator: 'drops_pct_from_high'
+    });
+
+    if (lower.includes('recovers') || lower.includes('recover')) {
+      strategy.exitConditions.push({
+        indicator: 'RECOVER_HIGH',
+        asset: strategy.asset,
+        lookbackBars: lookback,
+        operator: 'recovers_to_high'
+      });
+    }
+  }
+
+  // D) RSI rules
   const rsiBuyMatch = text.match(/(?:([A-Za-z]+)\s+)?rsi\s*(?:is\s*)?(?:below|<|less than)\s*(\d+)/i);
   if (rsiBuyMatch) {
     const rawWord = rsiBuyMatch[1] ? rsiBuyMatch[1].toUpperCase() : null;
@@ -160,7 +185,7 @@ export function parseStrategyDeterministic(prompt) {
     });
   }
 
-  // D) Moving Average Crossovers (e.g. "20 EMA crosses above 50 EMA")
+  // E) Moving Average Crossovers (e.g. "20 EMA crosses above 50 EMA")
   const crossBuyMatch = text.match(/(\d+)\s*(?:day\s*)?(ema|sma)\s*crosses\s*above\s*(\d+)\s*(?:day\s*)?(ema|sma)/i);
   if (crossBuyMatch) {
     const fastPeriod = parseInt(crossBuyMatch[1], 10);
@@ -187,29 +212,6 @@ export function parseStrategyDeterministic(prompt) {
         slowType,
         slowPeriod,
         operator: 'crosses_below'
-      });
-    }
-  }
-
-  // E) Drawdown from rolling High (e.g. "drops 10% from its 30 day high")
-  const highDdMatch = text.match(/drops?\s*(\d+(?:\.\d+)?)\s*%\s*from\s*(?:its\s*)?(\d+)\s*(?:day|bar)?\s*high/i);
-  if (highDdMatch) {
-    const dropPct = parseFloat(highDdMatch[1]);
-    const lookback = parseInt(highDdMatch[2], 10);
-    strategy.entryConditions.push({
-      indicator: 'HIGH_DRAWDOWN',
-      asset: strategy.asset,
-      lookbackBars: lookback,
-      dropPct,
-      operator: 'drops_pct_from_high'
-    });
-
-    if (lower.includes('recovers') || lower.includes('recover')) {
-      strategy.exitConditions.push({
-        indicator: 'RECOVER_HIGH',
-        asset: strategy.asset,
-        lookbackBars: lookback,
-        operator: 'recovers_to_high'
       });
     }
   }

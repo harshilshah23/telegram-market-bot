@@ -78,10 +78,9 @@ async function callOpenRouter(prompt) {
         { role: 'system', content: SYSTEM_INSTRUCTION },
         { role: 'user', content: `USER STRATEGY:\n"${prompt}"` }
       ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' }
+      temperature: 0.1
     }),
-    signal: AbortSignal.timeout(12000)
+    signal: AbortSignal.timeout(20000)
   });
 
   if (!res.ok) {

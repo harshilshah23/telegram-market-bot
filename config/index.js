@@ -5,7 +5,7 @@ export const config = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
-  openRouterModel: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+  openRouterModel: process.env.OPENROUTER_MODEL || 'inclusionai/ling-3.0-flash-fin:free',
   newsApiKey: process.env.NEWS_API_KEY || '',
   cacheTtlSeconds: parseInt(process.env.CACHE_TTL_SECONDS || '60', 10),
   newsCacheTtlSeconds: parseInt(process.env.NEWS_CACHE_TTL_SECONDS || '300', 10),
