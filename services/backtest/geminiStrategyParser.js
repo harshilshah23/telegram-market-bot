@@ -1,13 +1,7 @@
 import { config } from '../../config/index.js';
 import { createDefaultStrategy } from './strategySchema.js';
 
-export async function parseStrategyWithGemini(prompt) {
-  if (!config.hasGemini) {
-    console.log('[Backtest LLM Parser] GEMINI_API_KEY is not configured in .env or environment.');
-    return null;
-  }
-
-  const systemInstruction = `You are an expert quantitative trading strategy interpreter.
+const SYSTEM_INSTRUCTION = `You are an expert quantitative trading strategy interpreter.
 Convert the user's natural language trading strategy into a valid JSON strategy specification matching the schema below.
 
 SCHEMA:
@@ -58,50 +52,119 @@ CRITICAL RULES:
 6. Extract takeProfitPct (e.g. "take profit at 8%" -> 8.0) and stopLossPct (e.g. "stop loss at 4%" -> 4.0).
 7. Extract maxHoldingBars (e.g. "exit after 10 trading days" -> 10).`;
 
+function sanitizeJsonResponse(text) {
+  if (!text) return '';
+  let clean = text.trim();
+  if (clean.startsWith('```json')) clean = clean.slice(7);
+  else if (clean.startsWith('```')) clean = clean.slice(3);
+  if (clean.endsWith('```')) clean = clean.slice(0, -3);
+  return clean.trim();
+}
+
+async function callOpenRouter(prompt) {
+  const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.openRouterApiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/harshilshah23/telegram-market-bot',
+      'X-Title': 'Telegram Market Bot'
+    },
+    body: JSON.stringify({
+      model: 'meta-llama/llama-3.3-70b-instruct',
+      messages: [
+        { role: 'system', content: SYSTEM_INSTRUCTION },
+        { role: 'user', content: `USER STRATEGY:\n"${prompt}"` }
+      ],
+      temperature: 0.1,
+      response_format: { type: 'json_object' }
+    }),
+    signal: AbortSignal.timeout(12000)
+  });
+
+  if (!res.ok) {
+    throw new Error(`OpenRouter HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content;
+}
+
+async function callGemini(prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(config.geminiApiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [
+        { parts: [{ text: `${SYSTEM_INSTRUCTION}\n\nUSER STRATEGY:\n"${prompt}"` }] }
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: 'application/json'
+      }
+    }),
+    signal: AbortSignal.timeout(8000)
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gemini HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text;
+}
+
+export async function parseStrategyWithLLM(prompt) {
+  if (!config.hasLLM) {
+    console.log('[Backtest LLM Parser] Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is configured.');
+    return null;
+  }
+
+  let rawText = null;
+  let provider = '';
+
+  // 1. Try OpenRouter if configured
+  if (config.hasOpenRouter) {
+    try {
+      console.log(`[Backtest LLM Parser] Invoking OpenRouter (Gemini Flash) for prompt: "${prompt}"...`);
+      rawText = await callOpenRouter(prompt);
+      provider = 'OpenRouter';
+    } catch (err) {
+      console.warn(`[Backtest LLM Parser] OpenRouter call failed: ${err.message}`);
+    }
+  }
+
+  // 2. Try direct Gemini API if configured & OpenRouter didn't return
+  if (!rawText && config.hasGemini) {
+    try {
+      console.log(`[Backtest LLM Parser] Invoking Direct Gemini API for prompt: "${prompt}"...`);
+      rawText = await callGemini(prompt);
+      provider = 'Gemini';
+    } catch (err) {
+      console.warn(`[Backtest LLM Parser] Direct Gemini call failed: ${err.message}`);
+    }
+  }
+
+  if (!rawText) return null;
+
   try {
-    console.log(`[Backtest LLM Parser] Invoking Gemini API for prompt: "${prompt}"...`);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(config.geminiApiKey)}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          { parts: [{ text: `${systemInstruction}\n\nUSER STRATEGY:\n"${prompt}"` }] }
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json'
-        }
-      }),
-      signal: AbortSignal.timeout(8000)
-    });
-
-    if (!res.ok) {
-      console.warn(`[Backtest LLM Parser] Gemini HTTP error ${res.status}: ${res.statusText}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!rawText) {
-      console.warn('[Backtest LLM Parser] Empty content returned by Gemini.');
-      return null;
-    }
-
-    console.log('[Backtest LLM Parser] Raw JSON from Gemini:', rawText);
-    const parsed = JSON.parse(rawText);
+    const cleanJson = sanitizeJsonResponse(rawText);
+    console.log(`[Backtest LLM Parser] Raw JSON from ${provider}:`, cleanJson);
+    const parsed = JSON.parse(cleanJson);
     const defaults = createDefaultStrategy(parsed.asset || 'BTC');
     const strategy = { ...defaults, ...parsed, rawPrompt: prompt };
 
     return {
-      source: 'gemini',
+      source: provider.toLowerCase(),
       valid: strategy.unsupportedFeature ? false : (strategy.entryConditions?.length > 0),
       strategy,
       isUnsupported: Boolean(strategy.unsupportedFeature),
       error: strategy.unsupportedFeature || null
     };
   } catch (err) {
-    console.warn(`[Backtest LLM Parser] Gemini invocation exception: ${err.message}`);
+    console.warn(`[Backtest LLM Parser] Failed to parse JSON from ${provider}: ${err.message}`);
     return null;
   }
 }

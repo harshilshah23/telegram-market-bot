@@ -1,4 +1,4 @@
-import { parseStrategyWithGemini } from './geminiStrategyParser.js';
+import { parseStrategyWithLLM } from './geminiStrategyParser.js';
 import { parseStrategyDeterministic } from './deterministicStrategyParser.js';
 import { validateStrategy } from './strategySchema.js';
 
@@ -15,10 +15,10 @@ export async function parseStrategy(prompt) {
   console.log(`"${prompt}"`);
   console.log('======================================================');
 
-  // Step 1: Attempt LLM Interpretation (Gemini)
+  // Step 1: Attempt LLM Interpretation (OpenRouter / Gemini)
   let llmResult = null;
   try {
-    llmResult = await parseStrategyWithGemini(prompt);
+    llmResult = await parseStrategyWithLLM(prompt);
   } catch (err) {
     console.log(`[LLM parser → failure]: Exception during invocation - ${err.message}`);
   }
