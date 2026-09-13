@@ -10,31 +10,33 @@ export function formatConfirmationCard(strategy) {
 
   // Format entry rules
   const entryLines = strategy.entryConditions.map(c => {
-    if (c.indicator === 'RSI') return `RSI (${c.period || 14}) ${c.operator} ${c.value}`;
-    if (c.indicator === 'MA_CROSS') return `${c.fastPeriod} ${c.fastType} crosses above ${c.slowPeriod} ${c.slowType}`;
-    if (c.indicator === 'MA_FILTER') return `Price ${c.operator} ${c.period} ${c.type}`;
-    if (c.indicator === 'HIGH_DRAWDOWN') return `Drops ${c.dropPct}% from ${c.lookbackBars}D High`;
-    if (c.indicator === 'DAILY_CHANGE') return `Daily Drop ≥ ${c.dropPct}%`;
+    const assetPrefix = c.asset ? `[${c.asset}] ` : '';
+    if (c.indicator === 'RSI') return `${assetPrefix}RSI (${c.period || 14}) ${c.operator} ${c.value}`;
+    if (c.indicator === 'MA_CROSS') return `${assetPrefix}${c.fastPeriod} ${c.fastType} crosses above ${c.slowPeriod} ${c.slowType}`;
+    if (c.indicator === 'MA_FILTER') return `${assetPrefix}Price ${c.operator} ${c.period} ${c.type}`;
+    if (c.indicator === 'HIGH_DRAWDOWN') return `${assetPrefix}Drops ${c.dropPct}% from ${c.lookbackBars}D High`;
+    if (c.indicator === 'DAILY_CHANGE') return `${assetPrefix}Daily Drop ≥ ${c.dropPct}%`;
     return JSON.stringify(c);
   }).map(l => `• <code>${escapeHtml(l)}</code>`).join('\n');
 
   // Format exit rules
-  const exitLines = strategy.exitConditions.map(c => {
-    if (c.indicator === 'RSI') return `RSI (${c.period || 14}) ${c.operator} ${c.value}`;
-    if (c.indicator === 'MA_CROSS') return `${c.fastPeriod} ${c.fastType} crosses below ${c.slowPeriod} ${c.slowType}`;
+  const exitLines = (strategy.exitConditions || []).map(c => {
+    const assetPrefix = c.asset ? `[${c.asset}] ` : '';
+    if (c.indicator === 'RSI') return `${assetPrefix}RSI (${c.period || 14}) ${c.operator} ${c.value}`;
+    if (c.indicator === 'MA_CROSS') return `${assetPrefix}${c.fastPeriod} ${c.fastType} crosses below ${c.slowPeriod} ${c.slowType}`;
     if (c.indicator === 'PROFIT_TARGET') return `Gain ≥ +${c.targetPct}% from entry`;
     if (c.indicator === 'RECOVER_HIGH') return `Recovers to ${c.lookbackBars}D High`;
     return JSON.stringify(c);
   });
 
-  if (strategy.maxHoldingBars) {
-    exitLines.push(`Held for ${strategy.maxHoldingBars} bars`);
+  if (strategy.takeProfitPct) {
+    exitLines.push(`Take Profit at +${strategy.takeProfitPct}%`);
   }
   if (strategy.stopLossPct) {
     exitLines.push(`Stop Loss at -${strategy.stopLossPct}%`);
   }
-  if (strategy.takeProfitPct) {
-    exitLines.push(`Take Profit at +${strategy.takeProfitPct}%`);
+  if (strategy.maxHoldingBars) {
+    exitLines.push(`Max Holding Period: ${strategy.maxHoldingBars} trading days`);
   }
 
   const exitFormatted = exitLines.length > 0
@@ -42,14 +44,14 @@ export function formatConfirmationCard(strategy) {
     : '• <i>Default opposite signal or stop</i>';
 
   const leverageStr = strategy.leverage > 1.0 ? ` (${strategy.leverage}x Leverage)` : '';
-  const positionStr = `${strategy.positionSizePct}% Capital${leverageStr}`;
+  const positionStr = `${strategy.positionSizePct}% Available Capital${leverageStr}`;
 
   return `<b>🧪 BACKTEST STRATEGY SPECIFICATION</b>\n\n` +
-    `<b>Asset:</b> <code>${asset}</code> · <b>Timeframe:</b> <code>${tf}</code> · <code>${period}</code>${signalAsset}\n\n` +
-    `<b>🟢 ENTRY RULES:</b>\n${entryLines}\n\n` +
-    `<b>🔴 EXIT RULES:</b>\n${exitFormatted}\n\n` +
+    `<b>Traded Asset:</b> <code>${asset}</code> · <b>Timeframe:</b> <code>${tf}</code> · <code>${period}</code>${signalAsset}\n\n` +
+    `<b>🟢 ENTRY RULES (All must be satisfied):</b>\n${entryLines}\n\n` +
+    `<b>🔴 EXIT RULES (Whichever occurs first):</b>\n${exitFormatted}\n\n` +
     `<b>💼 POSITION:</b> <code>${escapeHtml(positionStr)}</code>\n` +
-    `<b>💸 COSTS:</b> <code>${strategy.feePct}% fees · ${strategy.slippagePct}% slippage</code>\n\n` +
+    `<b>💸 EXECUTION:</b> <code>Next-bar open · ${strategy.feePct}% fees · ${strategy.slippagePct}% slippage</code>\n\n` +
     `<i>Tap <b>RUN</b> below to execute this simulation on real historical data.</i>`;
 }
 

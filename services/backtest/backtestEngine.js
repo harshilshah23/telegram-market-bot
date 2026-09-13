@@ -7,15 +7,20 @@ import {
 } from './indicators.js';
 
 /**
- * Precalculates all indicators required by strategy conditions
+ * Precalculates indicators for bars
  */
-function prepareIndicators(bars, conditions) {
+function prepareIndicatorsForBars(bars, conditions, assetSymbol) {
   const closes = bars.map(b => b.close);
   const highs = bars.map(b => b.high);
   const lows = bars.map(b => b.low);
   const cache = {};
 
   for (const cond of conditions) {
+    // If condition specifies an asset and it doesn't match this bar set, skip
+    if (cond.asset && cond.asset.toUpperCase() !== assetSymbol.toUpperCase()) {
+      continue;
+    }
+
     if (cond.indicator === 'RSI') {
       const period = cond.period || 14;
       const key = `RSI_${period}`;
@@ -45,7 +50,7 @@ function prepareIndicators(bars, conditions) {
 }
 
 /**
- * Evaluates entry or exit conditions on bar index i
+ * Evaluates entry or exit condition on bar index i
  */
 function evaluateCondition(cond, i, bars, cache, position) {
   const close = bars[i].close;
@@ -100,6 +105,9 @@ function evaluateCondition(cond, i, bars, cache, position) {
     if (cond.operator === 'daily_drop_pct') {
       return changePct <= -Math.abs(cond.dropPct);
     }
+    if (cond.operator === 'daily_rise_pct') {
+      return changePct >= Math.abs(cond.dropPct || cond.risePct);
+    }
   }
 
   if (cond.indicator === 'PROFIT_TARGET' && position) {
@@ -111,7 +119,7 @@ function evaluateCondition(cond, i, bars, cache, position) {
   if (cond.indicator === 'RECOVER_HIGH' && position) {
     const lookback = cond.lookbackBars || 30;
     const high = cache[`HIGH_${lookback}`]?.[i];
-    return close >= high * 0.99; // within 1% of the high
+    return close >= high * 0.99;
   }
 
   return false;
@@ -123,7 +131,9 @@ function evaluateCondition(cond, i, bars, cache, position) {
  */
 export function executeBacktest(strategy, tradedBars, signalBars) {
   const allConditions = [...(strategy.entryConditions || []), ...(strategy.exitConditions || [])];
-  const { cache } = prepareIndicators(signalBars, allConditions);
+
+  const tradedData = prepareIndicatorsForBars(tradedBars, allConditions, strategy.asset);
+  const signalData = prepareIndicatorsForBars(signalBars, allConditions, strategy.signalAsset || strategy.asset);
 
   const initialCapital = strategy.initialCapital || 10000;
   const feeFraction = (strategy.feePct || 0.1) / 100;
@@ -131,23 +141,21 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
   const leverage = strategy.leverage || 1.0;
 
   let cash = initialCapital;
-  let position = null; // { entryPrice, entryBarIndex, entryDate, units, investedCapital }
+  let position = null;
   const trades = [];
   const equityCurve = [];
 
   const nBars = Math.min(tradedBars.length, signalBars.length);
   const startIndex = 20; // Warmup period
 
-  let pendingSignal = null; // Signal generated at bar t to execute at bar t+1 open
+  let pendingSignal = null;
 
   for (let i = startIndex; i < nBars; i++) {
     const tradedBar = tradedBars[i];
-    const signalBar = signalBars[i];
 
-    // 1. EXECUTE PENDING ORDER AT CURRENT BAR OPEN (Realistic next-bar execution)
+    // 1. EXECUTE PENDING ORDER AT CURRENT BAR OPEN
     if (pendingSignal) {
       if (pendingSignal.type === 'BUY' && !position) {
-        // Buy at Open + slippage
         const executionPrice = tradedBar.open * (1 + slippageFraction);
         const positionSizeFraction = (strategy.positionSizePct || 100) / 100;
         const capitalToInvest = cash * positionSizeFraction;
@@ -166,7 +174,6 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
           direction: strategy.direction || 'long'
         };
       } else if (pendingSignal.type === 'SELL' && position) {
-        // Sell at Open - slippage
         const executionPrice = tradedBar.open * (1 - slippageFraction);
         const grossReturn = position.units * executionPrice;
         const fee = grossReturn * feeFraction;
@@ -191,9 +198,8 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
       pendingSignal = null;
     }
 
-    // 2. CHECK INTRADAY STOP LOSS / TAKE PROFIT (if position active)
+    // 2. CHECK INTRADAY STOP LOSS / TAKE PROFIT
     if (position) {
-      // Check Stop Loss
       if (strategy.stopLossPct) {
         const slPrice = position.entryPrice * (1 - strategy.stopLossPct / 100);
         if (tradedBar.low <= slPrice) {
@@ -219,7 +225,6 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
         }
       }
 
-      // Check Take Profit
       if (position && strategy.takeProfitPct) {
         const tpPrice = position.entryPrice * (1 + strategy.takeProfitPct / 100);
         if (tradedBar.high >= tpPrice) {
@@ -245,7 +250,6 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
         }
       }
 
-      // Check Time-based exit (holding days)
       if (position && strategy.maxHoldingBars) {
         if (i - position.entryBarIndex >= strategy.maxHoldingBars) {
           pendingSignal = { type: 'SELL', reason: `Held ${strategy.maxHoldingBars} bars` };
@@ -262,13 +266,17 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
       close: tradedBar.close
     });
 
-    // 4. EVALUATE STRATEGY CONDITIONS ON BAR CLOSE (Generates signal for next bar)
+    // 4. EVALUATE STRATEGY CONDITIONS ON BAR CLOSE
     if (!pendingSignal) {
       if (!position) {
-        // Evaluate Entry
         let entryTriggered = strategy.entryConditions.length > 0;
         for (const cond of strategy.entryConditions) {
-          if (!evaluateCondition(cond, i, signalBars, cache, null)) {
+          // Route to appropriate bar data (traded asset vs signal asset)
+          const isTraded = cond.asset ? (cond.asset.toUpperCase() === strategy.asset.toUpperCase()) : false;
+          const targetBars = isTraded ? tradedBars : signalBars;
+          const targetCache = isTraded ? tradedData.cache : signalData.cache;
+
+          if (!evaluateCondition(cond, i, targetBars, targetCache, null)) {
             entryTriggered = false;
             break;
           }
@@ -277,10 +285,13 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
           pendingSignal = { type: 'BUY', reason: 'Entry rules met' };
         }
       } else {
-        // Evaluate Exit
         let exitTriggered = false;
         for (const cond of strategy.exitConditions) {
-          if (evaluateCondition(cond, i, signalBars, cache, position)) {
+          const isTraded = cond.asset ? (cond.asset.toUpperCase() === strategy.asset.toUpperCase()) : false;
+          const targetBars = isTraded ? tradedBars : signalBars;
+          const targetCache = isTraded ? tradedData.cache : signalData.cache;
+
+          if (evaluateCondition(cond, i, targetBars, targetCache, position)) {
             exitTriggered = true;
             break;
           }
@@ -315,10 +326,9 @@ export function executeBacktest(strategy, tradedBars, signalBars) {
     });
   }
 
-  const finalCapital = cash;
   return {
     initialCapital,
-    finalCapital,
+    finalCapital: cash,
     trades,
     equityCurve
   };

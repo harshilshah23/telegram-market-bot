@@ -26,7 +26,7 @@ function normalizeSymbol(sym) {
 
 export function parseStrategyDeterministic(prompt) {
   if (!prompt || typeof prompt !== 'string') {
-    return { valid: false, error: 'Empty strategy text provided.' };
+    return { source: 'deterministic', valid: false, error: 'Empty strategy text provided.' };
   }
 
   const text = prompt.trim();
@@ -35,6 +35,7 @@ export function parseStrategyDeterministic(prompt) {
   // 1. Detect unsupported features (options chains, orderbook depth, sentiment scraping)
   if (lower.includes('options chain') || lower.includes('implied volatility skew') || lower.includes('order book depth') || lower.includes('orderbook')) {
     return {
+      source: 'deterministic',
       valid: false,
       isUnsupported: true,
       error: 'Historical options-chain and order-book depth data are not supported by the free data feeds. Please specify technical indicators (RSI, EMA, SMA, ATR), price action, or multi-asset triggers.'
@@ -45,7 +46,7 @@ export function parseStrategyDeterministic(prompt) {
   let tradedAsset = null;
   let signalAsset = null;
 
-  // Check multi-asset pattern: e.g. "buy BTC whenever QQQ drops"
+  // Check multi-asset pattern: e.g. "buy BTC whenever QQQ falls/drops"
   const multiAssetMatch = text.match(/buy\s+([A-Za-z]+)\s+(?:when|whenever|if)\s+([A-Za-z]+)/i);
   if (multiAssetMatch && COMMON_ASSETS.includes(multiAssetMatch[2].toUpperCase())) {
     tradedAsset = normalizeSymbol(multiAssetMatch[1]);
@@ -64,7 +65,7 @@ export function parseStrategyDeterministic(prompt) {
   }
 
   if (!tradedAsset) {
-    tradedAsset = 'BTC'; // default
+    tradedAsset = 'BTC';
     signalAsset = 'BTC';
   }
 
@@ -72,7 +73,7 @@ export function parseStrategyDeterministic(prompt) {
   strategy.signalAsset = signalAsset;
   strategy.rawPrompt = prompt;
 
-  // 3. Detect Timeframe (default: 1d)
+  // 3. Timeframe detection (default: 1d)
   if (lower.includes('1h') || lower.includes('1 hour') || lower.includes('hourly')) {
     strategy.timeframe = '1h';
   } else if (lower.includes('4h') || lower.includes('4 hour')) {
@@ -83,13 +84,20 @@ export function parseStrategyDeterministic(prompt) {
     strategy.timeframe = '1d';
   }
 
-  // 4. Detect Leverage (e.g., "leverage 2x", "2x leverage", "3x")
+  // 4. Position Sizing (e.g. "use 50% of capital", "size 25%", "50% position")
+  const sizeMatch = text.match(/(?:use|size|allocate|position\s*size)\s*(?:of)?\s*(\d+(?:\.\d+)?)\s*%/i) ||
+                    text.match(/(\d+(?:\.\d+)?)\s*%\s*(?:of\s*(?:available\s*)?capital|position)/i);
+  if (sizeMatch) {
+    strategy.positionSizePct = parseFloat(sizeMatch[1]);
+  }
+
+  // 5. Leverage (e.g., "leverage 2x", "2x leverage", "3x")
   const leverageMatch = text.match(/(?:leverage\s*(\d+(?:\.\d+)?)\s*x?|(\d+(?:\.\d+)?)\s*x\s*leverage)/i);
   if (leverageMatch) {
     strategy.leverage = parseFloat(leverageMatch[1] || leverageMatch[2]) || 1.0;
   }
 
-  // 5. Detect Stop Loss & Take Profit
+  // 6. Stop Loss & Take Profit (e.g., "stop loss at 4%", "take profit at 8%")
   const slMatch = text.match(/(?:stop\s*loss|sl)\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)\s*%/i);
   if (slMatch) {
     strategy.stopLossPct = parseFloat(slMatch[1]);
@@ -100,35 +108,59 @@ export function parseStrategyDeterministic(prompt) {
     strategy.takeProfitPct = parseFloat(tpMatch[1]);
   }
 
-  // 6. Detect Holding Period (e.g. "sell after 5 days", "hold for 10 bars")
-  const holdMatch = text.match(/(?:sell|exit|close)\s+after\s+(\d+)\s+(days|bars|hours)/i);
+  // 7. Holding Period / Time Exit (e.g. "exit after 10 trading days", "sell after 5 days")
+  const holdMatch = text.match(/(?:sell|exit|close)\s+(?:any\s+remaining\s+position\s+)?after\s+(\d+)\s+(?:trading\s+)?(days|bars|hours)/i);
   if (holdMatch) {
     strategy.maxHoldingBars = parseInt(holdMatch[1], 10);
   }
 
-  // 7. Extract Entry & Exit Conditions
-  // A) RSI rules
-  const rsiBuyMatch = text.match(/rsi\s*(?:is\s*)?(?:below|<|less than)\s*(\d+)/i);
+  // 8. Extract Entry Conditions
+  // A) Daily percentage drop/rise (e.g. "QQQ falls more than 2% in a day", "drops 5% in a day")
+  const dayChangeMatch = text.match(/([A-Za-z]+)?\s*(?:falls|drops)\s*(?:more than\s*)?(\d+(?:\.\d+)?)\s*%\s*in\s*a\s*day/i);
+  if (dayChangeMatch) {
+    const rawAsset = dayChangeMatch[1] ? normalizeSymbol(dayChangeMatch[1]) : strategy.signalAsset;
+    const dropPct = parseFloat(dayChangeMatch[2]);
+    strategy.entryConditions.push({
+      indicator: 'DAILY_CHANGE',
+      asset: rawAsset,
+      dropPct,
+      operator: 'daily_drop_pct'
+    });
+  }
+
+  // B) Moving average filter / condition (e.g. "BTC is above its 200 day EMA", "above 200 SMA")
+  const maFilterMatch = text.match(/(?:([A-Za-z]+)\s+is\s+)?(above|below)\s*(?:its|the)?\s*(\d+)(?:-|\s*)?(?:day\s*)?(ema|sma|moving\s*average)/i);
+  if (maFilterMatch) {
+    const rawWord = maFilterMatch[1] ? maFilterMatch[1].toUpperCase() : null;
+    const targetAsset = (rawWord && COMMON_ASSETS.includes(rawWord)) ? normalizeSymbol(rawWord) : strategy.asset;
+    const operator = maFilterMatch[2].toLowerCase() === 'above' ? '>' : '<';
+    const period = parseInt(maFilterMatch[3], 10);
+    const maType = maFilterMatch[4].toUpperCase().includes('EMA') ? 'EMA' : 'SMA';
+
+    strategy.entryConditions.push({
+      indicator: 'MA_FILTER',
+      asset: targetAsset,
+      type: maType,
+      period,
+      operator
+    });
+  }
+
+  // C) RSI rules
+  const rsiBuyMatch = text.match(/(?:([A-Za-z]+)\s+)?rsi\s*(?:is\s*)?(?:below|<|less than)\s*(\d+)/i);
   if (rsiBuyMatch) {
+    const rawWord = rsiBuyMatch[1] ? rsiBuyMatch[1].toUpperCase() : null;
+    const targetAsset = (rawWord && COMMON_ASSETS.includes(rawWord)) ? normalizeSymbol(rawWord) : strategy.asset;
     strategy.entryConditions.push({
       indicator: 'RSI',
+      asset: targetAsset,
       period: 14,
       operator: '<',
-      value: parseFloat(rsiBuyMatch[1])
+      value: parseFloat(rsiBuyMatch[2])
     });
   }
 
-  const rsiSellMatch = text.match(/rsi\s*(?:goes\s*above|>|crosses\s*above|greater than)\s*(\d+)/i);
-  if (rsiSellMatch) {
-    strategy.exitConditions.push({
-      indicator: 'RSI',
-      period: 14,
-      operator: '>',
-      value: parseFloat(rsiSellMatch[1])
-    });
-  }
-
-  // B) Moving Average Crossovers (e.g., "20 EMA crosses above 50 EMA", "exit when crosses below")
+  // D) Moving Average Crossovers (e.g. "20 EMA crosses above 50 EMA")
   const crossBuyMatch = text.match(/(\d+)\s*(?:day\s*)?(ema|sma)\s*crosses\s*above\s*(\d+)\s*(?:day\s*)?(ema|sma)/i);
   if (crossBuyMatch) {
     const fastPeriod = parseInt(crossBuyMatch[1], 10);
@@ -138,6 +170,7 @@ export function parseStrategyDeterministic(prompt) {
 
     strategy.entryConditions.push({
       indicator: 'MA_CROSS',
+      asset: strategy.asset,
       fastType,
       fastPeriod,
       slowType,
@@ -148,6 +181,7 @@ export function parseStrategyDeterministic(prompt) {
     if (lower.includes('crosses below') || lower.includes('cross below')) {
       strategy.exitConditions.push({
         indicator: 'MA_CROSS',
+        asset: strategy.asset,
         fastType,
         fastPeriod,
         slowType,
@@ -157,49 +191,41 @@ export function parseStrategyDeterministic(prompt) {
     }
   }
 
-  // C) Trend filter (e.g. "above the 200-day moving average" or "above 200 SMA")
-  const trendMatch = text.match(/above\s*(?:the\s*)?(\d+)(?:-day)?\s*(?:moving\s*average|sma|ema)/i);
-  if (trendMatch) {
-    strategy.entryConditions.push({
-      indicator: 'MA_FILTER',
-      type: 'SMA',
-      period: parseInt(trendMatch[1], 10),
-      operator: '>'
-    });
-  }
-
-  // D) Drawdown from N-day High (e.g. "drops 10% from its 30 day high", "sell when it recovers")
+  // E) Drawdown from rolling High (e.g. "drops 10% from its 30 day high")
   const highDdMatch = text.match(/drops?\s*(\d+(?:\.\d+)?)\s*%\s*from\s*(?:its\s*)?(\d+)\s*(?:day|bar)?\s*high/i);
   if (highDdMatch) {
     const dropPct = parseFloat(highDdMatch[1]);
     const lookback = parseInt(highDdMatch[2], 10);
     strategy.entryConditions.push({
       indicator: 'HIGH_DRAWDOWN',
+      asset: strategy.asset,
       lookbackBars: lookback,
-      dropPct: dropPct,
+      dropPct,
       operator: 'drops_pct_from_high'
     });
 
     if (lower.includes('recovers') || lower.includes('recover')) {
       strategy.exitConditions.push({
         indicator: 'RECOVER_HIGH',
+        asset: strategy.asset,
         lookbackBars: lookback,
         operator: 'recovers_to_high'
       });
     }
   }
 
-  // E) Daily percentage drop/spike (e.g. "drops more than 2% in a day", "drops 5% in a day")
-  const dayDropMatch = text.match(/drops?\s*(?:more than\s*)?(\d+(?:\.\d+)?)\s*%\s*in\s*a\s*day/i);
-  if (dayDropMatch) {
-    strategy.entryConditions.push({
-      indicator: 'DAILY_CHANGE',
-      dropPct: parseFloat(dayDropMatch[1]),
-      operator: 'daily_drop_pct'
+  // 9. Extract Exit Conditions
+  const rsiSellMatch = text.match(/rsi\s*(?:goes\s*above|>|crosses\s*above|greater than)\s*(\d+)/i);
+  if (rsiSellMatch) {
+    strategy.exitConditions.push({
+      indicator: 'RSI',
+      asset: strategy.asset,
+      period: 14,
+      operator: '>',
+      value: parseFloat(rsiSellMatch[1])
     });
   }
 
-  // F) Profit target exit (e.g. "sell when BTC rises 5%", "sell when rises 5%")
   const riseExitMatch = text.match(/(?:sell|exit)\s+when\s+(?:[a-zA-Z]+\s+)?rises\s*(\d+(?:\.\d+)?)\s*%/i);
   if (riseExitMatch) {
     strategy.exitConditions.push({
@@ -209,12 +235,11 @@ export function parseStrategyDeterministic(prompt) {
     });
   }
 
-  // Default exit fallback if entry exists but exit not specified:
-  // e.g. opposite condition or default 5% target / 10 bars
-  if (strategy.entryConditions.length > 0 && strategy.exitConditions.length === 0 && !strategy.maxHoldingBars && !strategy.takeProfitPct) {
+  // Fallback exit if none specified
+  if (strategy.entryConditions.length > 0 && strategy.exitConditions.length === 0 && !strategy.maxHoldingBars && !strategy.takeProfitPct && !strategy.stopLossPct) {
     const firstEntry = strategy.entryConditions[0];
     if (firstEntry.indicator === 'RSI') {
-      strategy.exitConditions.push({ indicator: 'RSI', period: 14, operator: '>', value: 70 });
+      strategy.exitConditions.push({ indicator: 'RSI', asset: strategy.asset, period: 14, operator: '>', value: 70 });
     } else if (firstEntry.indicator === 'HIGH_DRAWDOWN') {
       strategy.exitConditions.push({ indicator: 'PROFIT_TARGET', targetPct: 5.0 });
     } else {
@@ -223,6 +248,7 @@ export function parseStrategyDeterministic(prompt) {
   }
 
   return {
+    source: 'deterministic',
     valid: strategy.entryConditions.length > 0,
     strategy,
     error: strategy.entryConditions.length === 0 ? 'Could not extract valid entry conditions from the strategy.' : null
