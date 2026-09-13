@@ -1,4 +1,4 @@
-﻿import { escapeHtml } from './baseFormatter.js';
+import { escapeHtml, markdownToTelegramHtml } from './baseFormatter.js';
 import { BRIEF_ASSETS } from '../../services/intelligence/marketBriefService.js';
 
 export function formatMarketBrief(briefData) {
@@ -32,7 +32,7 @@ export function formatMarketBrief(briefData) {
 
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
   if (editorial) {
-    lines.push(editorial);
+    lines.push(markdownToTelegramHtml(editorial));
     lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
   }
 

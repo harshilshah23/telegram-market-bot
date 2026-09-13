@@ -11,6 +11,38 @@ export function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Converts LLM Markdown text into valid Telegram HTML
+ * 1. Escapes HTML entities first to prevent malformed tags
+ * 2. Converts bold **text** or __text__ to <b>text</b>
+ * 3. Converts italic *text* or _text_ to <i>text</i>
+ * 4. Converts `code` to <code>code</code>
+ * 5. Converts markdown bullets (- or *) into bullet characters
+ */
+export function markdownToTelegramHtml(text) {
+  if (!text || typeof text !== 'string') return '';
+
+  // First escape raw HTML special chars
+  let out = escapeHtml(text);
+
+  // Bold: **text** or __text__
+  out = out.replace(/(\*\*|__)(.+?)\1/g, '<b>$2</b>');
+
+  // Inline code: `code`
+  out = out.replace(/`([^`]+?)`/g, '<code>$1</code>');
+
+  // Italic: *text* (when not inside words or double asterisks)
+  out = out.replace(/(^|[^\*<b>])\*([^\*\n]+?)\*([^\*</b>]|$)/g, '$1<i>$2</i>$3');
+
+  // Convert markdown headers ### Header to <b>Header</b>
+  out = out.replace(/^#{1,4}\s+(.+)$/gm, '<b>$1</b>');
+
+  // Convert standard markdown bullet lines '* ' or '- ' to '• '
+  out = out.replace(/^[\*\-]\s+/gm, '• ');
+
+  return out;
+}
+
 export function formatPrice(price, currency = 'USD') {
   if (price === null || price === undefined || isNaN(price)) {
     return 'Price unavailable';

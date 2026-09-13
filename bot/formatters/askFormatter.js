@@ -1,18 +1,16 @@
-﻿import { escapeHtml } from './baseFormatter.js';
+﻿import { escapeHtml, markdownToTelegramHtml } from './baseFormatter.js';
 
 export function formatAskResponse(data) {
-  const { question, asset, news, answer } = data;
+  const { question, news, answer } = data;
 
   const lines = [];
   lines.push(`💬 <b>MARKET INTELLIGENCE Q&A</b>`);
   lines.push(`❓ <i>"${escapeHtml(question)}"</i>`);
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
 
-  // Answer body (may contain basic HTML or Markdown from LLM, ensure standard paragraph separation)
-  let cleanAnswer = answer
-    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
-    .replace(/\*(.*?)\*/g, '<i>$1</i>');
-  lines.push(cleanAnswer);
+  // Convert LLM Markdown into clean, valid Telegram HTML
+  const formattedAnswer = markdownToTelegramHtml(answer);
+  lines.push(formattedAnswer);
 
   if (news && news.length > 0) {
     lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
