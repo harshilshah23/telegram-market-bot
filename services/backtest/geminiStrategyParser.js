@@ -63,6 +63,7 @@ function sanitizeJsonResponse(text) {
 
 async function callOpenRouter(prompt) {
   const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const model = config.openRouterModel || 'meta-llama/llama-3.3-70b-instruct';
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -72,7 +73,7 @@ async function callOpenRouter(prompt) {
       'X-Title': 'Telegram Market Bot'
     },
     body: JSON.stringify({
-      model: 'meta-llama/llama-3.3-70b-instruct',
+      model,
       messages: [
         { role: 'system', content: SYSTEM_INSTRUCTION },
         { role: 'user', content: `USER STRATEGY:\n"${prompt}"` }
