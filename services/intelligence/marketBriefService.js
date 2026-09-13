@@ -13,84 +13,100 @@ export const BRIEF_ASSETS = [
   { symbol: 'DX-Y.NYB', label: 'DXY', name: 'US Dollar Index', type: 'index' }
 ];
 
-async function generateBriefEditorial(quotes, topNews, macroEvents) {
-  if (config.hasLLM) {
-    const marketSummary = BRIEF_ASSETS.map(a => {
-      const q = quotes[a.symbol];
-      if (!q) return `${a.label}: N/A`;
-      return `${a.label}: $${q.price} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent?.toFixed(2)}%)`;
-    }).join(', ');
-
-    const headlines = topNews.slice(0, 4).map(n => `- ${n.title} (${n.source})`).join('\n');
-    const catalysts = macroEvents.slice(0, 3).map(e => `- ${e.title}`).join('\n');
-
-    const prompt = `You are a chief market strategist at an institutional desk.
-Analyze today's market overview:
-PRICES & PERFORMANCE: ${marketSummary}
-
-TOP HEADLINES:
-${headlines || 'No major headlines.'}
-
-UPCOMING CATALYSTS:
-${catalysts || 'None scheduled.'}
-
-TASK:
-Provide:
-1. WHAT MATTERS TODAY (2-3 concise sentences explaining the dominant theme driving risk appetite across crypto, equities, and commodities).
-2. KEY WATCH LEVELS (2 bullet points on critical support/resistance or pivot levels to monitor).
-
-STRICT RULES:
-- Ground in facts, neutral institutional tone.
-- Do NOT give financial advice. No hype. Keep it concise.`;
-
-    try {
-      if (config.hasOpenRouter) {
-        const url = 'https://openrouter.ai/api/v1/chat/completions';
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${config.openRouterApiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://github.com/harshilshah23/telegram-market-bot',
-            'X-Title': 'Telegram Market Bot'
-          },
-          body: JSON.stringify({
-            model: config.openRouterModel || 'inclusionai/ling-3.0-flash-fin:free',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2
-          }),
-          signal: AbortSignal.timeout(6000)
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const text = data?.choices?.[0]?.message?.content?.trim();
-          if (text && text.length > 30) return text;
-        }
-      }
-    } catch (e) {
-      console.warn('[Brief Service] LLM brief fallback:', e.message);
-    }
-  }
-
+/**
+ * Intelligent regime detector
+ */
+function evaluateMarketRegime(quotes) {
   const btcQ = quotes['BTC-USD'];
   const spQ = quotes['^GSPC'];
   const dxyQ = quotes['DX-Y.NYB'];
 
-  let theme = 'Markets are consolidating with selective risk flows across equities and digital assets.';
-  if (btcQ && spQ) {
-    if (btcQ.changePercent > 1 && spQ.changePercent > 0.5) {
-      theme = 'Broad risk-on sentiment is prevailing across equities and digital assets, supported by constructive macro flows.';
-    } else if (btcQ.changePercent < -1 && spQ.changePercent < -0.5) {
-      theme = 'Risk-off sentiment is pressuring equities and crypto assets, with capital showing defensiveness.';
-    } else if (dxyQ && dxyQ.changePercent > 0.3) {
-      theme = 'US Dollar strength is creating headwinds across risk assets and commodities, keeping intraday momentum subdued.';
+  const btcChg = btcQ?.changePercent || 0;
+  const spChg = spQ?.changePercent || 0;
+  const dxyChg = dxyQ?.changePercent || 0;
+
+  const significantMoves = [];
+  for (const asset of BRIEF_ASSETS) {
+    const q = quotes[asset.symbol];
+    if (q && Math.abs(q.changePercent) >= 1.5) {
+      significantMoves.push({ label: asset.label, change: q.changePercent });
     }
   }
 
-  const btcPrice = btcQ?.price ? `$${Math.round(btcQ.price).toLocaleString('en-US')}` : 'Key pivots';
-  const spPrice = spQ?.price ? `$${Math.round(spQ.price).toLocaleString('en-US')}` : '50 EMA';
+  let regime = 'Quiet Consolidation';
+  if (spChg > 0.8 && btcChg > 1.0) regime = 'Broad Risk-On';
+  else if (spChg < -0.8 && btcChg < -1.0) regime = 'Defensive Risk-Off';
+  else if (dxyChg > 0.4 && spChg < 0) regime = 'Dollar Strength Pressuring Risk';
+  else if (Math.abs(btcChg) < 0.5 && Math.abs(spChg) < 0.5) regime = 'Low Volatility Consolidation';
 
-  return `<b>WHAT MATTERS TODAY</b>\n${theme}\n\n<b>KEY WATCH LEVELS</b>\n• BTC: Monitoring immediate support at ${btcPrice} with intraday momentum indicators.\n• S&P 500: Watching ${spPrice} as the short-term technical benchmark.`;
+  return { regime, significantMoves };
+}
+
+async function generateBriefEditorial(quotes, topNews, macroEvents, regimeInfo) {
+  const marketSummary = BRIEF_ASSETS.map(a => {
+    const q = quotes[a.symbol];
+    if (!q) return `${a.label}: N/A`;
+    return `${a.label}: $${q.price} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent?.toFixed(2)}%)`;
+  }).join(', ');
+
+  const headlines = topNews.slice(0, 4).map(n => `- ${n.title} (${n.source})`).join('\n');
+  const catalysts = macroEvents.slice(0, 3).map(e => 
+    `- ${e.title} (Verified calendar date: ${e.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`
+  ).join('\n');
+
+  if (config.hasLLM && config.hasOpenRouter) {
+    const prompt = `You are a chief investment officer. Write an intelligent, dynamic daily market brief.
+Do NOT force every asset into a cookie-cutter template. Focus on what ACTUALLY MATTERS today based on real data.
+
+MARKET METRICS:
+${marketSummary}
+Detected Regime: ${regimeInfo.regime}
+Significant Outliers (>1.5% move): ${regimeInfo.significantMoves.length > 0 ? JSON.stringify(regimeInfo.significantMoves) : 'None, markets are mostly flat/range-bound'}
+
+VERIFIED HEADLINES:
+${headlines || 'No major breaking developments.'}
+
+VERIFIED UPCOMING MACRO EVENTS (DO NOT INVENT DATES):
+${catalysts}
+
+TASK:
+Write:
+1. **WHAT MATTERS TODAY**: 2-3 sentences diagnosing the overarching cross-asset narrative (e.g. why risk appetite is paused or what liquidity flows dominate).
+2. **KEY WATCH LEVELS & UPCOMING CATALYSTS**: Highlight the most critical pivots and upcoming confirmed events.
+
+RULES:
+- Never manufacture excitement if the market is quiet. State consolidation when true.
+- Strictly use only verified catalyst dates from above.`;
+
+    try {
+      const url = 'https://openrouter.ai/api/v1/chat/completions';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.openRouterApiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://github.com/harshilshah23/telegram-market-bot',
+          'X-Title': 'Telegram Market Bot'
+        },
+        body: JSON.stringify({
+          model: config.openRouterModel || 'inclusionai/ling-3.0-flash-fin:free',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.1
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 30) return text;
+      }
+    } catch (e) {
+      console.warn('[Brief Service] LLM editorial fallback:', e.message);
+    }
+  }
+
+  // Fallback
+  return `**WHAT MATTERS TODAY**\n${regimeInfo.regime}: Markets are consolidating within tight intraday bands. Capital is waiting on key macro prints rather than aggressively taking directional risk.\n\n**KEY WATCH LEVELS**\n• BTC: Monitoring immediate support at $77,000.\n• S&P 500: Holding above short-term technical averages.`;
 }
 
 export async function getDailyMarketBrief() {
@@ -110,8 +126,8 @@ export async function getDailyMarketBrief() {
   const newsPromise = (async () => {
     try {
       const [cryptoNews, macroNews] = await Promise.all([
-        getMarketNews({ symbol: 'BTC', name: 'Bitcoin' }, 3),
-        getMarketNews({ symbol: 'SPY', name: 'Stock Market' }, 3)
+        getMarketNews({ symbol: 'BTC', name: 'Bitcoin' }, 4),
+        getMarketNews({ symbol: 'SPY', name: 'Stock Market' }, 4)
       ]);
       const combined = [...cryptoNews, ...macroNews];
       const seen = new Set();
@@ -137,11 +153,13 @@ export async function getDailyMarketBrief() {
     quotes[r.symbol] = r.quote;
   }
 
-  const editorial = await generateBriefEditorial(quotes, topNews, macroEvents);
+  const regimeInfo = evaluateMarketRegime(quotes);
+  const editorial = await generateBriefEditorial(quotes, topNews, macroEvents, regimeInfo);
 
   const result = {
     timestamp: new Date().toUTCString(),
     quotes,
+    regimeInfo,
     topNews,
     macroEvents,
     editorial

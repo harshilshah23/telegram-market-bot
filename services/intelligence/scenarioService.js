@@ -1,14 +1,11 @@
-﻿import { fetchHistoricalData } from '../backtest/dataService.js';
-import { parseScenarioWithLLM, parseScenarioDeterministic } from './scenarioParser.js';
+import { fetchHistoricalData } from '../backtest/dataService.js';
+import { parseScenarioSemantics } from './scenarioParser.js';
+import { HISTORICAL_MACRO_EVENTS } from './historicalEventsCatalog.js';
 import { config } from '../../config/index.js';
 
-/**
- * Calculates Pearson correlation
- */
 function calculateCorrelation(x, y) {
   const n = Math.min(x.length, y.length);
   if (n < 10) return 0;
-
   let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
   for (let i = 0; i < n; i++) {
     sumX += x[i];
@@ -17,38 +14,27 @@ function calculateCorrelation(x, y) {
     sumX2 += x[i] * x[i];
     sumY2 += y[i] * y[i];
   }
-
   const num = n * sumXY - sumX * sumY;
   const den = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-  if (den === 0) return 0;
-  return num / den;
+  return den === 0 ? 0 : Number((num / den).toFixed(2));
 }
 
-/**
- * Directional Beta of Y on X: Cov(Y, X) / Var(X)
- * Measures: How much does Y move per unit move in X?
- */
 function calculateBeta(dependentReturns, independentReturns) {
   const n = Math.min(dependentReturns.length, independentReturns.length);
   if (n < 10) return 1.0;
-
-  let meanIndep = 0;
-  for (let i = 0; i < n; i++) meanIndep += independentReturns[i];
+  let meanIndep = 0, meanDep = 0;
+  for (let i = 0; i < n; i++) {
+    meanIndep += independentReturns[i];
+    meanDep += dependentReturns[i];
+  }
   meanIndep /= n;
-
-  let meanDep = 0;
-  for (let i = 0; i < n; i++) meanDep += dependentReturns[i];
   meanDep /= n;
-
-  let cov = 0;
-  let varIndep = 0;
+  let cov = 0, varIndep = 0;
   for (let i = 0; i < n; i++) {
     cov += (dependentReturns[i] - meanDep) * (independentReturns[i] - meanIndep);
     varIndep += Math.pow(independentReturns[i] - meanIndep, 2);
   }
-
-  if (varIndep === 0) return 1.0;
-  return cov / varIndep;
+  return varIndep === 0 ? 1.0 : Number((cov / varIndep).toFixed(2));
 }
 
 function formatSymbol(sym) {
@@ -69,101 +55,206 @@ function getReturns(bars) {
   return rets;
 }
 
+/**
+ * Calculates actual subsequent performance across impact assets following a historical event date
+ */
+async function calculatePostEventPerformance(eventDateStr, impactAssets) {
+  const targetTs = Math.floor(new Date(eventDateStr).getTime() / 1000);
+  const results = {};
+
+  for (const asset of impactAssets) {
+    const sym = formatSymbol(asset);
+    const bars = await fetchHistoricalData(sym, '5y', '1d').catch(() => []);
+    if (!bars || bars.length === 0) continue;
+
+    // Find bar closest to event date
+    let eventIdx = -1;
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i].time >= targetTs) {
+        eventIdx = i;
+        break;
+      }
+    }
+
+    if (eventIdx !== -1 && eventIdx + 30 < bars.length) {
+      const baseClose = bars[eventIdx].close;
+      const d1 = Number((((bars[eventIdx + 1]?.close - baseClose) / baseClose) * 100).toFixed(2));
+      const d7 = Number((((bars[eventIdx + 5]?.close - baseClose) / baseClose) * 100).toFixed(2));
+      const d30 = Number((((bars[eventIdx + 22]?.close - baseClose) / baseClose) * 100).toFixed(2));
+      results[asset] = { d1, d7, d30 };
+    }
+  }
+
+  return results;
+}
+
 export async function analyzeMarketScenario(scenarioText) {
-  // 1. Natural language scenario -> structured DSL
-  let parsed = null;
-  if (config.hasLLM) {
-    parsed = await parseScenarioWithLLM(scenarioText);
-  }
-  if (!parsed) {
-    parsed = parseScenarioDeterministic(scenarioText);
-  }
+  // 1. Semantic scenario understanding
+  const parsed = await parseScenarioSemantics(scenarioText);
+  const { scenarioType, shock, conditions = [], impactAssets = [], analysisRequested = {} } = parsed;
 
-  const { shockAsset, shockPct, shockType, impactAssets, analyzeRecoveryTime, macroContext } = parsed;
+  const results = {
+    scenario: scenarioText,
+    scenarioType,
+    shock,
+    conditions,
+    impactAssets,
+    // Backward-compatible aliases for keyboards and older callers
+    asset: shock?.target || 'BTC',
+    shockAsset: shock?.target || 'BTC',
+    shockPct: (shock?.direction === 'negative' ? -1 : 1) * (shock?.magnitude || 20),
+    methodology: '',
+    sampleSize: 0,
+    confidenceWarning: null,
+    sensitivityResults: [],
+    historicalPrecedents: [],
+    recoveryStats: null,
+    explanation: ''
+  };
 
-  // 2. Retrieve historical data for shock asset & all impact assets
-  const shockSymbol = formatSymbol(shockAsset);
-  const shockBars = await fetchHistoricalData(shockSymbol, '3y', '1d').catch(() => []);
-  const shockReturns = getReturns(shockBars);
+  // METHOD 1: MACRO EVENT / CONDITIONAL / HISTORICAL ANALOGUE
+  if (scenarioType === 'macro_event' || scenarioType === 'conditional_scenario' || scenarioType === 'historical_analogue' || shock.target === 'FED') {
+    results.methodology = 'Historical Event Window & Post-Event Performance Calculation';
+    
+    // Fetch real occurrences from catalog
+    let relevantEvents = HISTORICAL_MACRO_EVENTS['FED_RATE_CUT_50BPS'] || [];
 
-  // 3. For each impact asset, compute exact directional beta: Beta(ImpactAsset on ShockAsset)
-  const impactCalculations = [];
-  for (const impAsset of impactAssets) {
-    const impSymbol = formatSymbol(impAsset);
-    const impBars = await fetchHistoricalData(impSymbol, '3y', '1d').catch(() => []);
-    const impReturns = getReturns(impBars);
+    // If conditional (e.g. while already in an uptrend)
+    if (conditions.some(c => c.toLowerCase().includes('uptrend'))) {
+      relevantEvents = relevantEvents.filter(e => e.btcTrend === 'uptrend');
+    }
 
-    if (impReturns.length > 10 && shockReturns.length > 10) {
-      const corr = calculateCorrelation(impReturns, shockReturns);
-      // Directional Beta: How impactAsset responds to shockAsset move
-      const beta = calculateBeta(impReturns, shockReturns);
-      const impliedMove = Number((shockPct * beta).toFixed(1));
+    results.sampleSize = relevantEvents.length;
+    if (results.sampleSize < 3) {
+      results.confidenceWarning = `Small historical sample size (${results.sampleSize} matching occurrence${results.sampleSize === 1 ? '' : 's'}). Historical outcomes should be treated as illustrative case studies, not statistical certainties.`;
+    }
 
-      impactCalculations.push({
-        asset: impAsset,
-        symbol: impSymbol,
-        beta: Number(beta.toFixed(2)),
-        correlation: Number(corr.toFixed(2)),
-        impliedMovePct: impliedMove
+    // Calculate real returns post-event for all occurrences with data
+    for (const evt of relevantEvents) {
+      const perf = await calculatePostEventPerformance(evt.date, impactAssets);
+      results.historicalPrecedents.push({
+        name: evt.name,
+        date: evt.date,
+        context: evt.context,
+        subsequentPerformance: perf
       });
     }
-  }
 
-  // 4. Calculate historical recovery times on the shock asset
-  let historicalInstances = 0;
-  let avgRecoveryDays = 0;
-  const recoveryDaysList = [];
-  const targetThreshold = shockPct / 100;
+    // Also calculate standard 3-year asset sensitivities to S&P 500 / Macro benchmark
+    const macroBars = await fetchHistoricalData('^GSPC', '3y', '1d').catch(() => []);
+    const macroRets = getReturns(macroBars);
 
-  for (let i = 1; i < shockBars.length - 30; i++) {
-    const barChange = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
-    const isShockMatch = targetThreshold < 0
-      ? barChange <= targetThreshold * 0.4
-      : barChange >= targetThreshold * 0.4;
-
-    if (isShockMatch) {
-      historicalInstances++;
-      const preShock = shockBars[i - 1].close;
-      let recDays = null;
-      for (let j = i + 1; j < Math.min(i + 120, shockBars.length); j++) {
-        if (targetThreshold < 0 && shockBars[j].close >= preShock) {
-          recDays = j - i;
-          break;
-        } else if (targetThreshold > 0 && shockBars[j].close <= preShock) {
-          recDays = j - i;
-          break;
-        }
+    for (const imp of impactAssets) {
+      const impSym = formatSymbol(imp);
+      const impBars = await fetchHistoricalData(impSym, '3y', '1d').catch(() => []);
+      const impRets = getReturns(impBars);
+      if (impRets.length > 10 && macroRets.length > 10) {
+        const beta = calculateBeta(impRets, macroRets);
+        const corr = calculateCorrelation(impRets, macroRets);
+        results.sensitivityResults.push({
+          asset: imp,
+          betaToBenchmark: beta,
+          benchmarkName: 'S&P 500 (^GSPC)',
+          correlation: corr
+        });
       }
-      if (recDays !== null) recoveryDaysList.push(recDays);
     }
+  } 
+  // METHOD 2: DIRECT ASSET PRICE SHOCK / RELATIVE SHOCK
+  else {
+    results.methodology = 'Directional Empirical Sensitivity & Drawdown Recovery Analysis';
+    const shockSym = formatSymbol(shock.target);
+    const shockBars = await fetchHistoricalData(shockSym, '5y', '1d').catch(() => []);
+    const shockRets = getReturns(shockBars);
+
+    // Calculate directional beta for each impact asset
+    for (const imp of impactAssets) {
+      const impSym = formatSymbol(imp);
+      const impBars = await fetchHistoricalData(impSym, '5y', '1d').catch(() => []);
+      const impRets = getReturns(impBars);
+
+      if (impRets.length > 10 && shockRets.length > 10) {
+        const beta = calculateBeta(impRets, shockRets);
+        const corr = calculateCorrelation(impRets, shockRets);
+        const magnitude = shock.magnitude || 20;
+        const sign = shock.direction === 'negative' ? -1 : 1;
+        const impliedMove = Number(((sign * magnitude) * beta).toFixed(1));
+
+        results.sensitivityResults.push({
+          asset: imp,
+          betaToShockAsset: beta,
+          correlation: corr,
+          impliedSensitivityMovePct: impliedMove
+        });
+      }
+    }
+
+    // Calculate genuine historical drawdown recovery times
+    const targetThreshold = (shock.direction === 'negative' ? -1 : 1) * ((shock.magnitude || 20) / 100);
+    const recoveryDaysList = [];
+    let occurrences = 0;
+
+    for (let i = 1; i < shockBars.length - 30; i++) {
+      const barChange = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
+      const isMatch = targetThreshold < 0 ? barChange <= targetThreshold * 0.4 : barChange >= targetThreshold * 0.4;
+      if (isMatch) {
+        occurrences++;
+        const preShock = shockBars[i - 1].close;
+        let recDays = null;
+        for (let j = i + 1; j < Math.min(i + 150, shockBars.length); j++) {
+          if (targetThreshold < 0 && shockBars[j].close >= preShock) {
+            recDays = j - i;
+            break;
+          } else if (targetThreshold > 0 && shockBars[j].close <= preShock) {
+            recDays = j - i;
+            break;
+          }
+        }
+        if (recDays !== null) recoveryDaysList.push(recDays);
+      }
+    }
+
+    results.sampleSize = occurrences;
+    if (occurrences < 4) {
+      results.confidenceWarning = `Sample size is limited to ${occurrences} historical instances of comparable magnitude in the 5Y lookback.`;
+    }
+
+    const avgRecovery = recoveryDaysList.length > 0 
+      ? Math.round(recoveryDaysList.reduce((a, b) => a + b, 0) / recoveryDaysList.length)
+      : null;
+
+    results.recoveryStats = {
+      occurrences,
+      avgRecoveryTradingDays: avgRecovery,
+      minRecoveryDays: recoveryDaysList.length > 0 ? Math.min(...recoveryDaysList) : null,
+      maxRecoveryDays: recoveryDaysList.length > 0 ? Math.max(...recoveryDaysList) : null
+    };
   }
 
-  if (recoveryDaysList.length > 0) {
-    avgRecoveryDays = Math.round(recoveryDaysList.reduce((a, b) => a + b, 0) / recoveryDaysList.length);
-  }
-
-  // 5. Build strict factual synthesis for LLM explanation
-  const calculationSummary = impactCalculations.map(c => 
-    `- ${c.asset} beta to ${shockAsset}: ${c.beta} (correlation: ${c.correlation}), calculated implied move: ${c.impliedMovePct > 0 ? '+' : ''}${c.impliedMovePct}%`
-  ).join('\n');
-
-  let explanation = '';
+  // LLM SYNTHESIS OF DETERMINISTIC RESULTS
   if (config.hasLLM && config.hasOpenRouter) {
-    const prompt = `You are a quantitative macro analyst. Explain these REAL calculated historical metrics for a hypothetical scenario.
+    const prompt = `You are a quantitative macro strategist. Explain the following REAL calculated historical metrics for a hypothetical user scenario.
 USER SCENARIO: "${scenarioText}"
 
-CALCULATED HISTORICAL DATA (DO NOT CHANGE OR INVENT NEW NUMBERS):
-- Primary Shock Asset: ${shockAsset} (${shockPct > 0 ? '+' : ''}${shockPct}% shock)
-- Historical instances of similar drawdown/shock: ${historicalInstances}
-- Average historical recovery time to pre-shock levels: ${avgRecoveryDays || '35-50'} trading days
-- Measured sensitivities:
-${calculationSummary}
+STRUCTURED SCENARIO:
+- Scenario Type: ${results.scenarioType}
+- Shock: ${JSON.stringify(results.shock)}
+- Conditions: ${JSON.stringify(results.conditions)}
+- Methodology Used: ${results.methodology}
+- Sample Size: ${results.sampleSize}
+- Confidence Warning: ${results.confidenceWarning || 'Sufficient sample size'}
+
+DETERMINISTIC CALCULATED RESULTS (DO NOT ALTER ANY NUMBERS):
+${results.sensitivityResults.length > 0 ? 'Sensitivities:\n' + JSON.stringify(results.sensitivityResults, null, 2) : ''}
+${results.historicalPrecedents.length > 0 ? 'Historical Occurrences Post-Event Performance:\n' + JSON.stringify(results.historicalPrecedents, null, 2) : ''}
+${results.recoveryStats ? 'Recovery Statistics:\n' + JSON.stringify(results.recoveryStats, null, 2) : ''}
 
 INSTRUCTIONS:
-1. Explain the historical transmission mechanism cleanly (e.g. "Because ETH exhibits an empirical beta of [X] relative to BTC...").
-2. Note the directional relationship accurately: "${impactAssets.join(', ')} beta relative to ${shockAsset}".
-3. Mention the historical recovery duration based strictly on the ${avgRecoveryDays || '35-50'} days calculated.
-4. Keep it concise (2 short paragraphs). Do NOT give financial advice.`;
+1. Explain what actually occurred or what the calculated sensitivity indicates.
+2. If this is a macro event (e.g. Fed cut), cite the specific historical occurrences and their real 1-day/7-day/30-day performance.
+3. If this is an asset shock, explain the directional sensitivity and recovery duration strictly based on calculated values.
+4. Mention the confidence warning if sample size is small.
+5. Keep it institutional, objective, concise (2 to 3 paragraphs). No financial advice.`;
 
     try {
       const url = 'https://openrouter.ai/api/v1/chat/completions';
@@ -180,32 +271,23 @@ INSTRUCTIONS:
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.1
         }),
-        signal: AbortSignal.timeout(6000)
+        signal: AbortSignal.timeout(8000)
       });
       if (res.ok) {
         const data = await res.json();
-        explanation = data?.choices?.[0]?.message?.content?.trim();
+        results.explanation = data?.choices?.[0]?.message?.content?.trim();
       }
     } catch (e) {
-      console.warn('[Scenario Service] LLM explanation failed:', e.message);
+      console.warn('[Scenario Service] LLM synthesis fallback:', e.message);
     }
   }
 
-  if (!explanation) {
-    explanation = impactCalculations.map(c => 
-      `Historically, <b>${c.asset}</b> exhibits a beta of <b>${c.beta}</b> relative to <b>${shockAsset}</b> (correlation: <i>${c.correlation}</i>). ` +
-      `Under a ${shockPct}% shock in ${shockAsset}, historical sensitivity points to an implied move of approximately <b>${c.impliedMovePct > 0 ? '+' : ''}${c.impliedMovePct}%</b>.`
-    ).join('\n\n') + (avgRecoveryDays ? `\n\nPast similar shock drawdowns in ${shockAsset} required an average of <b>${avgRecoveryDays} trading days</b> to fully recover to pre-shock highs.` : '');
-  }
+  results.impactCalculations = results.sensitivityResults.map(r => ({
+    asset: r.asset,
+    beta: r.betaToShockAsset ?? r.betaToBenchmark,
+    correlation: r.correlation,
+    impliedMovePct: r.impliedSensitivityMovePct ?? 0
+  }));
 
-  return {
-    scenario: scenarioText,
-    shockAsset,
-    shockPct,
-    shockType,
-    impactCalculations,
-    historicalInstances,
-    avgRecoveryDays: avgRecoveryDays ? `${avgRecoveryDays} days` : 'Variable (30-60 days)',
-    explanation
-  };
+  return results;
 }

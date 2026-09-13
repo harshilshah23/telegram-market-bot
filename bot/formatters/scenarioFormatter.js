@@ -1,41 +1,87 @@
 ﻿import { escapeHtml, markdownToTelegramHtml } from './baseFormatter.js';
 
 export function formatScenarioReport(data) {
-  const { scenario, shockAsset, shockPct, impactCalculations, historicalInstances, avgRecoveryDays, explanation } = data;
+  const {
+    scenario,
+    scenarioType,
+    shock,
+    conditions,
+    methodology,
+    sampleSize,
+    confidenceWarning,
+    sensitivityResults,
+    historicalPrecedents,
+    recoveryStats,
+    explanation
+  } = data;
 
   const lines = [];
   lines.push(`🎲 <b>SCENARIO SENSITIVITY ANALYSIS</b>`);
   lines.push(`<i>"${escapeHtml(scenario)}"</i>`);
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
 
-  const sign = shockPct >= 0 ? '+' : '';
-  lines.push(`<b>HYPOTHETICAL SHOCK</b>`);
-  lines.push(`• Primary Shock Asset: <b>${escapeHtml(shockAsset)}</b>`);
-  lines.push(`• Modeled Shock: <b>${sign}${shockPct}%</b>`);
+  lines.push(`<b>SCENARIO STRUCTURE & METHODOLOGY</b>`);
+  lines.push(`• <b>Type:</b> <code>${escapeHtml(scenarioType || 'asset_shock')}</code>`);
+  lines.push(`• <b>Event/Shock:</b> ${escapeHtml(shock?.description || `${shock?.target} ${shock?.magnitude}${shock?.units}`)}`);
+  if (conditions && conditions.length > 0) {
+    lines.push(`• <b>Conditions:</b> ${conditions.map(c => escapeHtml(c)).join(', ')}`);
+  }
+  lines.push(`• <b>Analytical Method:</b> ${escapeHtml(methodology)}`);
+  lines.push(`• <b>Historical Sample:</b> ${sampleSize} matching period${sampleSize === 1 ? '' : 's'}`);
   lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
 
-  if (impactCalculations && impactCalculations.length > 0) {
-    lines.push(`<b>HISTORICAL SENSITIVITY & TRANSMISSION</b>`);
-    for (const item of impactCalculations) {
-      const impSign = item.impliedMovePct >= 0 ? '+' : '';
-      lines.push(`• <b>${escapeHtml(item.asset)}</b> (Beta to ${escapeHtml(shockAsset)}: <code>${item.beta}</code>, Corr: <code>${item.correlation}</code>)`);
-      lines.push(`  ↳ Implied Sensitivity Move: <b>${impSign}${item.impliedMovePct}%</b>`);
+  if (confidenceWarning) {
+    lines.push(`⚠️ <b>Confidence Warning:</b> <i>${escapeHtml(confidenceWarning)}</i>`);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  }
+
+  // 1. Direct Sensitivity Output
+  if (sensitivityResults && sensitivityResults.length > 0) {
+    lines.push(`<b>HISTORICAL SENSITIVITIES (BETA & SENSITIVITY)</b>`);
+    for (const item of sensitivityResults) {
+      if (item.impliedSensitivityMovePct !== undefined) {
+        const sign = item.impliedSensitivityMovePct >= 0 ? '+' : '';
+        lines.push(`• <b>${escapeHtml(item.asset)}</b> (Beta to ${escapeHtml(shock.target)}: <code>${item.betaToShockAsset}</code>, Corr: <code>${item.correlation}</code>)`);
+        lines.push(`  ↳ Calculated Sensitivity Implied Move: <b>${sign}${item.impliedSensitivityMovePct}%</b>`);
+      } else if (item.betaToBenchmark !== undefined) {
+        lines.push(`• <b>${escapeHtml(item.asset)}</b> vs ${escapeHtml(item.benchmarkName)} (Beta: <code>${item.betaToBenchmark}</code>, Corr: <code>${item.correlation}</code>)`);
+      }
     }
     lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
   }
 
-  lines.push(`<b>HISTORICAL PRECEDENTS & RECOVERY</b>`);
-  lines.push(`• Past similar shock periods identified: <b>${historicalInstances}</b>`);
-  lines.push(`• Average historical recovery time: <b>${escapeHtml(String(avgRecoveryDays))}</b>`);
-  lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  // 2. Historical Precedents / Analogues
+  if (historicalPrecedents && historicalPrecedents.length > 0) {
+    lines.push(`<b>GENUINE HISTORICAL PRECEDENTS</b>`);
+    for (const prec of historicalPrecedents) {
+      lines.push(`<b>📅 ${escapeHtml(prec.name)} (${prec.date})</b>`);
+      if (prec.subsequentPerformance && Object.keys(prec.subsequentPerformance).length > 0) {
+        const pLines = Object.entries(prec.subsequentPerformance).map(([ast, p]) => 
+          `  • ${ast}: 1d: <code>${p.d1 >= 0 ? '+' : ''}${p.d1}%</code> | 7d: <code>${p.d7 >= 0 ? '+' : ''}${p.d7}%</code> | 30d: <code>${p.d30 >= 0 ? '+' : ''}${p.d30}%</code>`
+        );
+        lines.push(pLines.join('\n'));
+      }
+    }
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  }
+
+  // 3. Drawdown Recovery Statistics
+  if (recoveryStats && recoveryStats.avgRecoveryTradingDays) {
+    lines.push(`<b>HISTORICAL DRAWDOWN RECOVERY</b>`);
+    lines.push(`• Average Time to Recover Pre-Shock High: <b>${recoveryStats.avgRecoveryTradingDays} trading days</b>`);
+    if (recoveryStats.minRecoveryDays && recoveryStats.maxRecoveryDays) {
+      lines.push(`• Historical Range: <b>${recoveryStats.minRecoveryDays} — ${recoveryStats.maxRecoveryDays} days</b>`);
+    }
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
+  }
 
   if (explanation) {
-    lines.push(`<b>MECHANISM & CONTEXT</b>`);
+    lines.push(`<b>CONTEXT & TRANSMISSION</b>`);
     lines.push(markdownToTelegramHtml(explanation));
     lines.push(`━━━━━━━━━━━━━━━━━━━━━`);
   }
 
-  lines.push(`⚠️ <i>Historical relationships do not predict future results. Correlations shift during liquidity stress. Not financial advice.</i>`);
+  lines.push(`⚠️ <i>Historical relationships are empirical sensitivities, not forecasts. Correlations shift during regime changes. Not financial advice.</i>`);
 
   return lines.join('\n');
 }
