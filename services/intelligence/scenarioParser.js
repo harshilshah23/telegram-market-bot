@@ -1,31 +1,49 @@
-﻿import { config } from '../../config/index.js';
+import { config } from '../../config/index.js';
 
-const SYSTEM_INSTRUCTION = `You are an expert quantitative macroeconomist and market strategist.
-Your job is to read an arbitrary natural language hypothetical scenario and extract a structured representation.
-Do NOT convert one type of scenario into another (e.g. NEVER turn a rate cut into an equity rise proxy).
-Identify the true nature of the question and the analytical requirements.
+const SYSTEM_INSTRUCTION = `You are an institutional quantitative macro analyst and structured prompt compiler.
+Your task is to parse ANY arbitrary natural language market scenario into a strictly typed Scenario Specification.
 
 SCHEMA:
 {
   "scenarioType": "asset_shock" | "macro_event" | "conditional_scenario" | "relative_shock" | "historical_analogue",
   "shock": {
-    "target": "BTC",
-    "action": "price_drop",
-    "magnitude": 20.0,
-    "direction": "negative",
-    "units": "percent",
-    "description": "Bitcoin drops 20%"
+    "target": "BTC" | "GC=F" | "FED" | "ECB" | "NVDA" | "SPY" | "QQQ" | "EUR" | string,
+    "action": "price_drop" | "price_rise" | "rate_cut" | "rate_hike" | "inflation_shock" | "policy_easing",
+    "magnitude": number, // e.g. 10 for 10%, 50 for 50bps, 0.5 for 50bps
+    "units": "percent" | "bps" | "points",
+    "direction": "negative" | "positive",
+    "description": string // e.g. "Gold falls 10%", "ECB cuts rates by 50bps"
   },
-  "conditions": [],
-  "impactAssets": ["ETH", "QQQ"],
-  "timeHorizon": "medium",
+  "conditions": [
+    // Pre-existing market state conditions described in prompt, e.g.:
+    // { "asset": "QQQ", "type": "trend", "value": "downtrend" }
+  ],
+  "impactAssets": [
+    // Standard symbols for assets whose reaction is being analyzed, e.g. ["DX-Y.NYB", "QQQ", "BTC", "ETH", "GC=F", "EURUSD=X"]
+  ],
   "analysisRequested": {
-    "sensitivity": true,
-    "recoveryTime": false,
-    "analogues": false
+    "sensitivity": boolean,
+    "recoveryTime": boolean,
+    "analogues": boolean
   }
 }
-Return ONLY valid raw JSON.`;
+
+CRITICAL RULES:
+1. ENTITY INTEGRITY:
+   - "gold" -> "GC=F" (Commodity Gold). NEVER substitute BTC or equities!
+   - "dollar" / "dxy" -> "DX-Y.NYB"
+   - "nasdaq" / "tech" -> "QQQ"
+   - "euro" -> "EURUSD=X"
+   - "ECB" -> target: "ECB", units: "bps". NEVER turn ECB into BTC or equities!
+   - "Fed" -> target: "FED", units: "bps".
+2. UNIT INTEGRITY:
+   - "50bps" / "50 basis points" -> magnitude: 50, units: "bps". NEVER treat as 50% price change.
+   - "10%" / "drops 10%" -> magnitude: 10, units: "percent".
+3. SCENARIO CLASSIFICATION:
+   - "ECB cuts rates by 50bps" -> "macro_event" (target: "ECB", action: "rate_cut").
+   - "Bitcoin falls 15% while the Nasdaq is already in a strong downtrend" -> "conditional_scenario" (target: "BTC", magnitude: 15, units: "percent", conditions: [{"asset": "QQQ", "type": "trend", "value": "downtrend"}]).
+   - "If gold suddenly drops 10%, what tends to happen to the dollar, Nasdaq and Bitcoin?" -> "asset_shock" (target: "GC=F", magnitude: 10, units: "percent", impactAssets: ["DX-Y.NYB", "QQQ", "BTC"]).
+4. Return ONLY valid, raw JSON. No markdown backticks.`;
 
 function sanitizeJson(text) {
   if (!text) return '';
@@ -36,7 +54,27 @@ function sanitizeJson(text) {
   return clean.trim();
 }
 
+/**
+ * Standardizes common naming to Yahoo / Bot Symbols
+ */
+export function normalizeSymbol(raw) {
+  if (!raw) return 'BTC';
+  const s = raw.toUpperCase().trim();
+  if (s === 'GOLD' || s === 'XAU') return 'GC=F';
+  if (s === 'DOLLAR' || s === 'DXY' || s === 'USD') return 'DX-Y.NYB';
+  if (s === 'EURO' || s === 'EUR') return 'EURUSD=X';
+  if (s === 'NASDAQ' || s === 'TECH' || s === 'TECH STOCKS') return 'QQQ';
+  if (s === 'S&P' || s === 'S&P 500' || s === 'STOCKS' || s === 'EQUITIES') return 'SPY';
+  if (s === 'BITCOIN') return 'BTC';
+  if (s === 'ETHEREUM' || s === 'ETHER') return 'ETH';
+  if (s === 'SOLANA') return 'SOL';
+  if (s === 'NVIDIA') return 'NVDA';
+  if (s === 'TESLA') return 'TSLA';
+  return s;
+}
+
 export async function parseScenarioSemantics(scenarioText) {
+  // 1. Try LLM if available and not rate limited
   if (config.hasLLM && config.hasOpenRouter) {
     try {
       const url = 'https://openrouter.ai/api/v1/chat/completions';
@@ -64,23 +102,33 @@ export async function parseScenarioSemantics(scenarioText) {
         const raw = data?.choices?.[0]?.message?.content;
         const clean = sanitizeJson(raw);
         const parsed = JSON.parse(clean);
-        if (parsed.scenarioType && parsed.shock) {
+        if (parsed.scenarioType && parsed.shock && parsed.shock.target) {
+          // Normalize targets and impact symbols
+          parsed.shock.target = normalizeSymbol(parsed.shock.target);
+          if (Array.isArray(parsed.impactAssets)) {
+            parsed.impactAssets = parsed.impactAssets.map(normalizeSymbol);
+          }
+          console.log('[Scenario Semantic Parser] LLM Successfully parsed scenario:', JSON.stringify(parsed));
           return parsed;
         }
       }
     } catch (err) {
-      // Gracefully fall back to deterministic NLP parser
+      // Non-fatal, fall back
     }
   }
 
+  // 2. High-Accuracy General Semantic NLP Parser (Zero LLM reliance fallback)
   return parseScenarioDeterministic(scenarioText);
 }
 
+/**
+ * Universal deterministic parser that accurately respects entities, units, and conditions
+ */
 export function parseScenarioDeterministic(scenarioText) {
   const text = scenarioText.toLowerCase();
 
   let scenarioType = 'asset_shock';
-  let target = 'BTC';
+  let target = null;
   let action = 'price_drop';
   let magnitude = 20.0;
   let direction = 'negative';
@@ -91,119 +139,160 @@ export function parseScenarioDeterministic(scenarioText) {
   let recoveryTime = false;
   let analogues = false;
 
-  // 1. Check for specific historical event / analogue query
-  if (/last time|past precedent|historical analogue|what happened when|how did.*react the last time/.test(text)) {
-    scenarioType = 'historical_analogue';
-    analogues = true;
+  // A. Detect Units and Magnitude
+  const bpsMatch = text.match(/(\d+(\.\d+)?)\s*(bps|basis\s*points?)/);
+  const pctMatch = text.match(/(-?\d+(\.\d+)?)\s*%/);
+  const fractionThird = /a third|one third|1\/3/.test(text);
+  const fractionFifth = /one fifth|a fifth|1\/5/.test(text);
+  const fractionQuarter = /a quarter|one quarter|1\/4/.test(text);
+  const fractionHalf = /half|50%/.test(text);
+
+  if (bpsMatch) {
+    magnitude = parseFloat(bpsMatch[1]);
+    units = 'bps';
+  } else if (pctMatch) {
+    magnitude = Math.abs(parseFloat(pctMatch[1]));
+    units = 'percent';
+  } else if (fractionThird) {
+    magnitude = 33.3;
+    units = 'percent';
+  } else if (fractionFifth) {
+    magnitude = 20.0;
+    units = 'percent';
+  } else if (fractionQuarter) {
+    magnitude = 25.0;
+    units = 'percent';
+  } else if (fractionHalf) {
+    magnitude = 50.0;
+    units = 'percent';
   }
 
-  // 2. Identify Macro shocks vs Asset shocks
-  if (/fed\b.*(cut|easing|ease|lowered|rate cut)/.test(text) || /rate cut/.test(text)) {
-    target = 'FED';
-    action = 'rate_cut';
-    units = 'bps';
-    magnitude = 50;
+  // B. Detect Direction & Action
+  const isDrop = /(fall|drop|crash|down|lose|loss|drawdown|plunge|slump|decline|sink|tumble|cut|hammered|dump|bleed)/.test(text);
+  const isRise = /(rise|rally|pump|up|gain|surge|climb|spike|soar|hike|boost)/.test(text);
+
+  if (isDrop) {
     direction = 'negative';
-    if (!analogues) scenarioType = 'macro_event';
-  } else if (/fed\b.*(hike|hiking|tightening|raised|rate hike)/.test(text) || /rate hike/.test(text)) {
-    target = 'FED';
-    action = 'rate_hike';
-    units = 'bps';
-    magnitude = 25;
+    action = units === 'bps' ? 'rate_cut' : 'price_drop';
+  } else if (isRise) {
     direction = 'positive';
-    if (!analogues) scenarioType = 'macro_event';
-  } else if (/cpi|inflation/.test(text) && /hot|surprise|jump|spike/.test(text)) {
-    target = 'CPI';
-    action = 'inflation_surprise';
-    units = 'points';
-    magnitude = 0.5;
-    direction = 'positive';
-    if (!analogues) scenarioType = 'macro_event';
+    action = units === 'bps' ? 'rate_hike' : 'price_rise';
   }
 
-  // 3. Conditional qualifiers (e.g. "while already in a strong uptrend")
-  if (/while|already in|during|if.*and/.test(text)) {
-    if (/uptrend|bull|rally|momentum/.test(text)) {
-      conditions.push('Asset or market in strong uptrend');
-      if (scenarioType !== 'historical_analogue') scenarioType = 'conditional_scenario';
-    } else if (/downtrend|bear|recession|contraction/.test(text)) {
-      conditions.push('Liquidity contraction or macro stress');
-      if (scenarioType !== 'historical_analogue') scenarioType = 'conditional_scenario';
+  // C. Detect Macro Central Banks
+  const isEcb = /\becb\b|european central bank/.test(text);
+  const isFed = /\bfed\b|federal reserve|fomc|powell/.test(text);
+
+  if (isEcb) {
+    target = 'ECB';
+    scenarioType = 'macro_event';
+    if (units !== 'percent') units = 'bps';
+  } else if (isFed && (units === 'bps' || /rate|cut|hike|ease|easing|policy/.test(text))) {
+    target = 'FED';
+    scenarioType = 'macro_event';
+    if (units !== 'percent') units = 'bps';
+  }
+
+  // D. Detect Asset Shocks (if not Central Bank)
+  if (!target) {
+    // Check which asset is directly linked to the shock verb or clause
+    // e.g. "If gold suddenly drops", "Bitcoin falls 15%", "NVDA plunges", "BTC gets hammered"
+    if (/(gold|xau).*(drop|fall|crash|plunge|down|lose|decline|sink)/.test(text) || /(if|suppose|assume)\s*(gold|xau)/.test(text)) {
+      target = 'GC=F';
+    } else if (/(btc|bitcoin).*(drop|fall|crash|plunge|down|lose|decline|hammered|dump)/.test(text) || /(if|suppose|assume|let's say)\s*(btc|bitcoin)/.test(text)) {
+      target = 'BTC';
+    } else if (/(eth|ethereum).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(eth|ethereum)/.test(text)) {
+      target = 'ETH';
+    } else if (/(sol|solana).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(sol|solana)/.test(text)) {
+      target = 'SOL';
+    } else if (/(nvda|nvidia).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(nvda|nvidia)/.test(text)) {
+      target = 'NVDA';
+    } else if (/(nasdaq|qqq|tech).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(nasdaq|qqq)/.test(text)) {
+      target = 'QQQ';
+    } else if (/(s&p|spy|stocks?).*(drop|fall|crash|plunge|down|lose|decline)/.test(text) || /(if|suppose|assume)\s*(s&p|spy)/.test(text)) {
+      target = 'SPY';
+    } else {
+      // Default entity extraction fallback
+      if (text.includes('gold')) target = 'GC=F';
+      else if (text.includes('eth')) target = 'ETH';
+      else if (text.includes('sol')) target = 'SOL';
+      else if (text.includes('nvda')) target = 'NVDA';
+      else target = 'BTC';
     }
   }
 
-  // 4. Magnitude and units parsing (fractions, percentages, bps)
-  const pctMatch = text.match(/(-?\d+(\.\d+)?)\s*%/);
-  if (pctMatch) {
-    magnitude = parseFloat(pctMatch[1]);
-    units = 'percent';
-  } else if (/a third|one third|1\/3/.test(text)) {
-    magnitude = 33.3;
-    units = 'percent';
-  } else if (/one fifth|a fifth|1\/5/.test(text)) {
-    magnitude = 20.0;
-    units = 'percent';
-  } else if (/half|50%/.test(text)) {
-    magnitude = 50.0;
-    units = 'percent';
-  } else if (/quarter|25%/.test(text)) {
-    magnitude = 25.0;
-    units = 'percent';
-  } else if (/(\d+)\s*bps|(\d+)\s*basis/.test(text)) {
-    const m = text.match(/(\d+)\s*(bps|basis)/);
-    magnitude = m ? parseInt(m[1], 10) : 50;
-    units = 'bps';
+  // E. Detect Conditions (e.g. "while the Nasdaq is already in a strong downtrend")
+  let textWithoutCondition = text;
+  const condMatch = text.match(/(?:while|during|with)\s+([^.?!]+)/);
+  if (condMatch) {
+    const conditionText = condMatch[1].trim();
+    let condAsset = 'QQQ';
+    if (/nasdaq|qqq|tech/.test(conditionText)) condAsset = 'QQQ';
+    else if (/btc|bitcoin/.test(conditionText)) condAsset = 'BTC';
+    else if (/s&p|spy|stocks/.test(conditionText)) condAsset = 'SPY';
+
+    if (/downtrend|bear|falling|slump|stress|contraction/.test(conditionText)) {
+      conditions.push({ asset: condAsset, type: 'trend', value: 'downtrend', description: `${condAsset} in downtrend` });
+      scenarioType = 'conditional_scenario';
+    } else if (/uptrend|bull|rally|momentum/.test(conditionText)) {
+      conditions.push({ asset: condAsset, type: 'trend', value: 'uptrend', description: `${condAsset} in uptrend` });
+      scenarioType = 'conditional_scenario';
+    }
+
+    // Strip out the condition clause from text so condition assets aren't wrongly parsed as impact assets
+    textWithoutCondition = text.replace(condMatch[0], '');
   }
 
-  // Direction
-  if (/(fall|drop|crash|down|lose|loss|drawdown|plunge|slump|decline|sink|tumble|cut)/.test(text)) {
-    direction = 'negative';
-    action = action.includes('rate') ? action : 'price_drop';
-  } else if (/(rise|rally|pump|up|gain|surge|climb|spike|soar|hike)/.test(text)) {
-    direction = 'positive';
-    action = action.includes('rate') ? action : 'price_rise';
+  // F. Detect Impact Assets (assets whose reaction is requested)
+  // Ensure the target itself is NOT accidentally added to impactAssets
+  const candidateAssets = [
+    { key: 'dollar', sym: 'DX-Y.NYB', regex: /\b(dollar|dxy|usd|greenback)\b/ },
+    { key: 'euro', sym: 'EURUSD=X', regex: /\b(euro|eur)\b/ },
+    { key: 'gold', sym: 'GC=F', regex: /\b(gold|xau)\b/ },
+    { key: 'nasdaq', sym: 'QQQ', regex: /\b(nasdaq|tech|tech stocks|qqq)\b/ },
+    { key: 'stocks', sym: 'SPY', regex: /\b(stocks|equities|s&p|spy)\b/ },
+    { key: 'bitcoin', sym: 'BTC', regex: /\b(bitcoin|btc|crypto)\b/ },
+    { key: 'ethereum', sym: 'ETH', regex: /\b(ethereum|eth)\b/ },
+    { key: 'solana', sym: 'SOL', regex: /\b(solana|sol)\b/ }
+  ];
+
+  for (const cand of candidateAssets) {
+    if (cand.regex.test(textWithoutCondition)) {
+      // Do not add if it is the shock target
+      if (cand.sym !== target) {
+        if (!impactAssets.includes(cand.sym)) {
+          impactAssets.push(cand.sym);
+        }
+      }
+    }
   }
-
-  // 5. Target Asset Identification (if not macro FED/CPI)
-  if (target !== 'FED' && target !== 'CPI') {
-    // Who is receiving the shock verb?
-    const btcShock = /(bitcoin|btc).*(loses|drops|falls|crashes|plunges|drawdown|drops)/.test(text) || /(if|suppose|assume)\s*(bitcoin|btc)/.test(text);
-    const ethShock = /(ethereum|eth).*(loses|drops|falls|crashes|plunges|drawdown)/.test(text) || /(if|suppose|assume)\s*(ethereum|eth)/.test(text);
-    const nvdaShock = /(nvidia|nvda).*(loses|drops|falls|crashes|plunges|drawdown)/.test(text) || /(if|suppose|assume)\s*(nvidia|nvda)/.test(text);
-    const solShock = /(solana|sol).*(loses|drops|falls|crashes|plunges|drawdown)/.test(text) || /(if|suppose|assume)\s*(solana|sol)/.test(text);
-    const spyShock = /(s&p|spy).*(loses|drops|falls|crashes|plunges|drawdown)/.test(text) || /(if|suppose|assume)\s*(s&p|spy)/.test(text);
-
-    if (nvdaShock) target = 'NVDA';
-    else if (ethShock) target = 'ETH';
-    else if (solShock) target = 'SOL';
-    else if (spyShock) target = 'SPY';
-    else if (btcShock) target = 'BTC';
-    else target = 'BTC'; // default to BTC if crypto shock
-  }
-
-  // 6. Impact Assets Identification (assets whose reaction is asked)
-  if (/ethereum|eth\b/.test(text) && target !== 'ETH') impactAssets.push('ETH');
-  if (/solana|sol\b/.test(text) && target !== 'SOL') impactAssets.push('SOL');
-  if (/nasdaq|qqq|tech/.test(text) && target !== 'QQQ') impactAssets.push('QQQ');
-  if (/bitcoin|btc\b/.test(text) && target !== 'BTC') impactAssets.push('BTC');
-  if (/dollar|dxy|greenback|usd/.test(text) && target !== 'DX-Y.NYB') impactAssets.push('DX-Y.NYB');
-  if (/gold|xau/.test(text) && target !== 'GC=F') impactAssets.push('GC=F');
-  if (/s&p|spy|stock market/.test(text) && target !== 'SPY') impactAssets.push('SPY');
 
   if (impactAssets.length === 0) {
-    impactAssets.push(target === 'BTC' ? 'ETH' : 'BTC');
+    // If conditional scenario, default impact assets to benchmark & crypto
+    if (scenarioType === 'conditional_scenario') {
+      impactAssets.push('QQQ', 'SPY', target === 'BTC' ? 'ETH' : 'BTC');
+    } else {
+      impactAssets.push(target === 'BTC' ? 'ETH' : 'BTC');
+    }
   }
 
-  // If two assets are directly compared in an asset shock, label relative_shock
-  if (scenarioType === 'asset_shock' && impactAssets.length === 1 && !analogues) {
-    scenarioType = 'relative_shock';
+  // G. Check for Historical Analogue or Recovery Time
+  if (/last time|history|analogue|precedent|what happened when/.test(text)) {
+    if (scenarioType !== 'conditional_scenario' && scenarioType !== 'macro_event') {
+      scenarioType = 'historical_analogue';
+    }
+    analogues = true;
   }
 
-  if (/recovery|recover|bounce|how long|time/.test(text)) {
+  if (/recovery|recover|bounce|how long/.test(text)) {
     recoveryTime = true;
   }
 
-  return {
+  if (scenarioType === 'asset_shock' && impactAssets.length === 1 && !conditions.length && !analogues) {
+    scenarioType = 'relative_shock';
+  }
+
+  const result = {
     scenarioType,
     shock: {
       target,
@@ -222,4 +311,7 @@ export function parseScenarioDeterministic(scenarioText) {
       analogues
     }
   };
+
+  console.log('[Scenario Deterministic Parser] Parsed scenario:', JSON.stringify(result));
+  return result;
 }

@@ -1,4 +1,4 @@
-﻿import { escapeHtml, markdownToTelegramHtml } from './baseFormatter.js';
+import { escapeHtml, markdownToTelegramHtml } from './baseFormatter.js';
 
 export function formatScenarioReport(data) {
   const {
@@ -24,7 +24,8 @@ export function formatScenarioReport(data) {
   lines.push(`• <b>Type:</b> <code>${escapeHtml(scenarioType || 'asset_shock')}</code>`);
   lines.push(`• <b>Event/Shock:</b> ${escapeHtml(shock?.description || `${shock?.target} ${shock?.magnitude}${shock?.units}`)}`);
   if (conditions && conditions.length > 0) {
-    lines.push(`• <b>Conditions:</b> ${conditions.map(c => escapeHtml(c)).join(', ')}`);
+    const formattedConds = conditions.map(c => typeof c === 'object' ? (c.description || `${c.asset} in ${c.value}`) : String(c));
+    lines.push(`• <b>Conditions:</b> ${formattedConds.map(escapeHtml).join(', ')}`);
   }
   lines.push(`• <b>Analytical Method:</b> ${escapeHtml(methodology)}`);
   lines.push(`• <b>Historical Sample:</b> ${sampleSize} matching period${sampleSize === 1 ? '' : 's'}`);

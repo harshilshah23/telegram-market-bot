@@ -1,4 +1,4 @@
-import { fetchHistoricalData } from '../backtest/dataService.js';
+import { fetchHistoricalData, fetchHistoricalWindow } from '../backtest/dataService.js';
 import { parseScenarioSemantics } from './scenarioParser.js';
 import { HISTORICAL_MACRO_EVENTS } from './historicalEventsCatalog.js';
 import { config } from '../../config/index.js';
@@ -57,30 +57,37 @@ function getReturns(bars) {
 
 /**
  * Calculates actual subsequent performance across impact assets following a historical event date
+ * Uses fetchHistoricalWindow to ensure dates outside the 5-year default window return true performance
  */
 async function calculatePostEventPerformance(eventDateStr, impactAssets) {
-  const targetTs = Math.floor(new Date(eventDateStr).getTime() / 1000);
+  const eventTs = Math.floor(new Date(eventDateStr).getTime() / 1000);
+  const startTs = eventTs - 7 * 86400;
+  const endTs = eventTs + 55 * 86400;
   const results = {};
 
   for (const asset of impactAssets) {
     const sym = formatSymbol(asset);
-    const bars = await fetchHistoricalData(sym, '5y', '1d').catch(() => []);
-    if (!bars || bars.length === 0) continue;
+    const bars = await fetchHistoricalWindow(sym, startTs, endTs).catch(() => null);
+    if (!bars || bars.length < 3) continue;
 
     // Find bar closest to event date
     let eventIdx = -1;
     for (let i = 0; i < bars.length; i++) {
-      if (bars[i].time >= targetTs) {
+      if (bars[i].time >= eventTs) {
         eventIdx = i;
         break;
       }
     }
 
-    if (eventIdx !== -1 && eventIdx + 30 < bars.length) {
+    if (eventIdx !== -1 && eventIdx < bars.length - 1) {
       const baseClose = bars[eventIdx].close;
-      const d1 = Number((((bars[eventIdx + 1]?.close - baseClose) / baseClose) * 100).toFixed(2));
-      const d7 = Number((((bars[eventIdx + 5]?.close - baseClose) / baseClose) * 100).toFixed(2));
-      const d30 = Number((((bars[eventIdx + 22]?.close - baseClose) / baseClose) * 100).toFixed(2));
+      const d1Idx = Math.min(eventIdx + 1, bars.length - 1);
+      const d7Idx = Math.min(eventIdx + 5, bars.length - 1);
+      const d30Idx = Math.min(eventIdx + 22, bars.length - 1);
+
+      const d1 = Number((((bars[d1Idx].close - baseClose) / baseClose) * 100).toFixed(2));
+      const d7 = Number((((bars[d7Idx].close - baseClose) / baseClose) * 100).toFixed(2));
+      const d30 = Number((((bars[d30Idx].close - baseClose) / baseClose) * 100).toFixed(2));
       results[asset] = { d1, d7, d30 };
     }
   }
@@ -112,16 +119,16 @@ export async function analyzeMarketScenario(scenarioText) {
     explanation: ''
   };
 
-  // METHOD 1: MACRO EVENT / CONDITIONAL / HISTORICAL ANALOGUE
-  if (scenarioType === 'macro_event' || scenarioType === 'conditional_scenario' || scenarioType === 'historical_analogue' || shock.target === 'FED') {
-    results.methodology = 'Historical Event Window & Post-Event Performance Calculation';
+  // METHOD 1: MACRO EVENT (Fed, ECB, Central Bank Rate Decisions)
+  if (scenarioType === 'macro_event' || shock.target === 'FED' || shock.target === 'ECB') {
+    results.methodology = 'Authentic Historical Macro Event Windows & Empirical Sensitivities';
     
-    // Fetch real occurrences from catalog
-    let relevantEvents = HISTORICAL_MACRO_EVENTS['FED_RATE_CUT_50BPS'] || [];
-
-    // If conditional (e.g. while already in an uptrend)
-    if (conditions.some(c => c.toLowerCase().includes('uptrend'))) {
-      relevantEvents = relevantEvents.filter(e => e.btcTrend === 'uptrend');
+    // Select the authentic macro catalog based on central bank entity
+    let relevantEvents = [];
+    if (shock.target === 'ECB') {
+      relevantEvents = HISTORICAL_MACRO_EVENTS['ECB_RATE_CUT'] || [];
+    } else {
+      relevantEvents = HISTORICAL_MACRO_EVENTS['FED_RATE_CUT'] || [];
     }
 
     results.sampleSize = relevantEvents.length;
@@ -157,6 +164,96 @@ export async function analyzeMarketScenario(scenarioText) {
           benchmarkName: 'S&P 500 (^GSPC)',
           correlation: corr
         });
+      }
+    }
+  } 
+  // METHOD 2: CONDITIONAL SCENARIO (Joint Multi-Condition Period Search)
+  else if (scenarioType === 'conditional_scenario') {
+    results.methodology = 'Joint Multi-Condition Historical Scan (Asset Shock & Benchmark Regime)';
+    
+    // Extract condition parameters
+    const cond = conditions[0] || {};
+    const condAsset = cond.asset || 'QQQ';
+    const condTrend = cond.value || 'downtrend';
+    const shockSym = formatSymbol(shock.target);
+    const condSym = formatSymbol(condAsset);
+
+    const [shockBars, condBars] = await Promise.all([
+      fetchHistoricalData(shockSym, '5y', '1d').catch(() => []),
+      fetchHistoricalData(condSym, '5y', '1d').catch(() => [])
+    ]);
+
+    if (shockBars && shockBars.length > 50 && condBars && condBars.length > 50) {
+      // Calculate 50-day EMA on benchmark to establish trend regime
+      const k = 2 / (50 + 1);
+      let ema = condBars[0].close;
+      const condMap = new Map();
+      for (let i = 0; i < condBars.length; i++) {
+        ema = condBars[i].close * k + ema * (1 - k);
+        const isDowntrend = condBars[i].close < ema;
+        condMap.set(condBars[i].date, { close: condBars[i].close, ema50: ema, isDowntrend });
+      }
+
+      // Search for joint conditions: Shock asset drop while benchmark condition is true
+      // Group nearby dates into distinct clusters (separated by >= 15 trading days)
+      const targetThreshold = (shock.magnitude || 15) / 100;
+      let lastClusterIdx = -999;
+      const matchingEvents = [];
+
+      for (let i = 5; i < shockBars.length - 25; i++) {
+        const condInfo = condMap.get(shockBars[i].date);
+        if (!condInfo) continue;
+        const trendMatches = condTrend === 'downtrend' ? condInfo.isDowntrend : !condInfo.isDowntrend;
+        if (!trendMatches) continue;
+
+        const rolling5dDrop = (shockBars[i].close - shockBars[i - 5].close) / shockBars[i - 5].close;
+        const dailyDrop = (shockBars[i].close - shockBars[i - 1].close) / shockBars[i - 1].close;
+        const isShockMatch = rolling5dDrop <= -targetThreshold || dailyDrop <= -(targetThreshold * 0.65);
+
+        if (isShockMatch && i - lastClusterIdx >= 15) {
+          lastClusterIdx = i;
+          const evtDate = shockBars[i].date;
+          const dropMag = rolling5dDrop <= -targetThreshold ? rolling5dDrop : dailyDrop;
+          matchingEvents.push({
+            date: evtDate,
+            name: `${shock.target} ${Math.abs((dropMag * 100).toFixed(1))}% Drawdown (${condAsset} in ${condTrend})`,
+            context: `${condAsset} was trading below its 50d EMA (${condInfo.close.toFixed(1)} vs ${condInfo.ema50.toFixed(1)}) as ${shock.target} dropped ${Math.abs((dropMag * 100).toFixed(1))}%`
+          });
+        }
+      }
+
+      results.sampleSize = matchingEvents.length;
+      if (results.sampleSize < 4) {
+        results.confidenceWarning = `Identified ${results.sampleSize} distinct historical period${results.sampleSize === 1 ? '' : 's'} where both conditions occurred simultaneously in the 5Y lookback.`;
+      }
+
+      // Calculate post-event forward returns for all matching periods
+      for (const evt of matchingEvents) {
+        const perf = await calculatePostEventPerformance(evt.date, [shock.target, ...impactAssets]);
+        results.historicalPrecedents.push({
+          name: evt.name,
+          date: evt.date,
+          context: evt.context,
+          subsequentPerformance: perf
+        });
+      }
+
+      // Calculate beta sensitivities between shock asset and impact assets
+      const shockRets = getReturns(shockBars);
+      for (const imp of impactAssets) {
+        const impSym = formatSymbol(imp);
+        const impBars = await fetchHistoricalData(impSym, '5y', '1d').catch(() => []);
+        const impRets = getReturns(impBars);
+        if (impRets.length > 10 && shockRets.length > 10) {
+          const beta = calculateBeta(impRets, shockRets);
+          const corr = calculateCorrelation(impRets, shockRets);
+          results.sensitivityResults.push({
+            asset: imp,
+            betaToShockAsset: beta,
+            correlation: corr,
+            impliedSensitivityMovePct: Number((-(shock.magnitude || 15) * beta).toFixed(1))
+          });
+        }
       }
     }
   } 
